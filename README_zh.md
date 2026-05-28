@@ -1,11 +1,13 @@
 [English](README.md)
+
 # polymarket
 
-**Polymarket AI Trading Agent**（中文主要文件）
+**Polymarket AI Trading Agent**（繁體中文主要說明文件）
 
-這是一個**以盈利為唯一目標**、把「保護本金」放在最高優先的自主 AI 交易代理。
+這是一個**以盈利為唯一目標**、把「保護本金」放在絕對最高優先的自主 AI 交易代理。
 
 ### 設計目標（嚴格排序）
+
 1. **最低目標（不可妥協）**：在 API 預算（約 $10）消耗完之前，錢包資金**絕對不能低於本金**，至少要賺到 $0.01。
 2. **合格目標**：賺回來的利潤能夠 cover 所使用的 API Token 費用。
 3. **滿分目標**：總利潤超過 $20 USD。
@@ -20,8 +22,9 @@
 
 ### 目前狀態
 - 主要開發分支：`feat/polymarket-ai-trading-agent`
-- 目前為**基礎架構階段**（skeleton + 安全框架 + 配置 + DB + CLI 雛形）
-- 完整自主迴圈、Edge Detector、Risk Manager 正在積極實作中
+- 核心模組已實作完成：Risk Manager（嚴格本金保護規則）、Edge Detector、Research Engine 與自主迴圈。
+- Agent 已經可以在 dry-run 模式下執行**完整決策流程**（`run --dry-run`），並將所有理由與風險評估完整記錄到 DuckDB。
+- 後續仍在進行強化、測試、監控與實盤交易整合等工作。
 
 **強烈建議**：任何人使用前務必先完整閱讀本文件與 `docs/architecture.md`，並且**永遠先用 `--dry-run` 模式**跑很久再考慮真實交易。
 
@@ -100,12 +103,13 @@ polymarket-ai-trader/
 │   ├── config.py
 │   ├── logging.py
 │   ├── agent/
-│   │   ├── loop.py            # 自主主迴圈（開發中）
+│   │   ├── loop.py            # 自主決策迴圈（dry-run 模式已可正常運作）
 │   │   ├── risk_manager.py    # ★ 最重要模組：本金守護
+│   │   ├── edge_detector.py   # LLM + 規則混合的 edge 判斷
 │   │   └── ...
-│   ├── polymarket/client.py   # 官方 SDK 包裝 + dry-run
-│   ├── data/db.py             # DuckDB schema + 資本快照
-│   ├── llm/provider.py        # litellm 抽象 + 成本估算
+│   ├── polymarket/client.py   # 官方 SDK 包裝 + 完整 dry-run 支援
+│   ├── data/db.py             # DuckDB schema + 資本快照 + 完整稽核軌跡
+│   ├── llm/provider.py        # litellm 抽象 + 成本追蹤
 │   └── ...
 ├── docs/architecture.md
 ├── tests/                     # 重點測試 risk rules
