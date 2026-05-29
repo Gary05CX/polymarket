@@ -13,4 +13,11 @@ This document will contain deeper technical details after initial implementation
 
 ## Key Components
 
-(See plan.md in the session directory for the original approved design.)
+(See plan.md in the session directory for the original approved design and the 2026 follow-up section on Persistent Market Intelligence.)
+
+**New (2026 iteration)**: Market Intelligence Layer
+- Scanner always persists the raw active batch to `market_snapshots` + `market_news_scores` first.
+- Cheap news relevance scoring happens on the batch; scores are written back every cycle.
+- Subsequent runs use `get_markets_to_skip()` + prior low scores to avoid re-researching low-value markets (directly solves repeated LLM token waste).
+- Same scores + category distribution enable real diversity beyond pure volume ranking.
+- Micro exploratory lane (tiny positions only on weak research) lives in EdgeDetector + RiskManager with its own relaxed gates while all capital breakers remain enforced.

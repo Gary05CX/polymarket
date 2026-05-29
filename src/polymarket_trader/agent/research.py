@@ -153,3 +153,63 @@ class ResearchEngine:
 
     async def close(self) -> None:
         await self.client.aclose()
+
+    async def quick_news_relevance_score(
+        self, question: str, raw_texts: list[str] | None = None, category: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Ultra-cheap relevance scorer for the broader market batch (used for persistent news scores).
+        Intended to be called on 10-20 markets per cycle using only free RSS + FAST_MODEL.
+        Returns a dict ready for MarketScoreRepo.log_news_score.
+        """
+        if raw_texts is None:
+            # Best-effort minimal fetch (only RSS, no paid APIs, short timeout)
+            rss = await self._fetch_relevant_rss(question, hours=48)
+            raw_texts = [f"{it['title']}. {it.get('summary','')[:180]}" for it in rss[:4]]
+
+        if not raw_texts:
+            return {
+                "news_score": 0.10,
+                "has_fresh_signal": False,
+                "sentiment": "neutral",
+                "key_signal": "no_rss_hits",
+                "sources_count": 0,
+            }
+
+        # Light compression + relevance judgment via the cheap fast model
+        try:
+            # Re-use existing synthesize path (it already does a small fast call)
+            synthesis, usage = await self.llm.synthesize_research(question, raw_texts[:6])
+            facts = synthesis.get("key_facts", "") or ""
+            takeaway = synthesis.get("one_line_takeaway", "") or ""
+            sentiment = synthesis.get("sentiment", "neutral")
+
+            # Simple heuristic score from the synthesis
+            score = 0.35
+            if len(facts) > 40:
+                score += 0.25
+            if sentiment in ("bullish", "bearish"):
+                score += 0.20
+            if "surprise" in (synthesis.get("surprise_level") or "").lower():
+                score += 0.15
+            score = max(0.08, min(0.92, score))
+
+            return {
+                "news_score": round(score, 3),
+                "has_fresh_signal": score > 0.35,
+                "sentiment": sentiment,
+                "key_signal": takeaway[:220] or facts[:220],
+                "sources_count": len(raw_texts),
+                "llm_model": usage.get("model") if isinstance(usage, dict) else None,
+            }
+        except Exception as exc:
+            logger.warning("quick_relevance_failed", error=str(exc)[:80])
+            # Rule-based fallback
+            base = 0.22 + min(len(raw_texts) * 0.08, 0.35)
+            return {
+                "news_score": round(base, 3),
+                "has_fresh_signal": len(raw_texts) >= 2,
+                "sentiment": "neutral",
+                "key_signal": f"{len(raw_texts)} raw items (fallback)",
+                "sources_count": len(raw_texts),
+            }

@@ -50,3 +50,59 @@ def test_blacklist_category_blocks(rm):
     )
     assert approved is False
     assert "blacklist" in reason.lower() or "sports" in reason.lower()
+
+
+# ------------------------------------------------------------------
+# Micro exploratory position tests (weak-research tiny bets)
+# These are the ONLY path allowed to use relaxed 5.5%/0.40 gates.
+# All sacred capital, budget, loss-circuit, blacklist, position-count breakers MUST still apply.
+# ------------------------------------------------------------------
+
+def test_micro_approves_tiny_size_on_marginal_edge(rm):
+    approved, size, reason = rm.approve_trade(
+        edge=0.062, confidence=0.48, recommended_size_usd=None,
+        is_micro_position=True
+    )
+    assert approved is True
+    assert size is not None
+    assert size <= 0.30
+    assert "MICRO" in reason
+
+
+def test_micro_still_respects_equity_protection(rm):
+    # Simulate being slightly underwater (should never approve anything, micro or not)
+    with patch("polymarket_trader.agent.risk_manager.RiskManager._current_equity_proxy", return_value=9.8):
+        approved, _, reason = rm.approve_trade(
+            edge=0.07, confidence=0.55, recommended_size_usd=None,
+            is_micro_position=True
+        )
+        assert approved is False
+        assert "principal" in reason.lower()
+
+
+def test_micro_respects_api_budget_and_loss_circuit(rm):
+    with patch("polymarket_trader.agent.risk_manager.CostRepo.total_spent_usd", return_value=9.6):
+        approved, _, reason = rm.approve_trade(
+            edge=0.06, confidence=0.45, recommended_size_usd=None,
+            is_micro_position=True
+        )
+        assert approved is False
+        assert "budget" in reason.lower()
+
+
+def test_micro_blacklist_still_blocks(rm):
+    approved, _, reason = rm.approve_trade(
+        edge=0.07, confidence=0.50, recommended_size_usd=None,
+        is_micro_position=True, market_category="entertainment"
+    )
+    assert approved is False
+    assert "blacklist" in reason.lower() or "entertainment" in reason.lower()
+
+
+def test_micro_size_never_exceeds_cap(rm):
+    approved, size, _ = rm.approve_trade(
+        edge=0.09, confidence=0.65, recommended_size_usd=5.0,   # ridiculous ask
+        is_micro_position=True
+    )
+    assert approved is True
+    assert size <= 0.30

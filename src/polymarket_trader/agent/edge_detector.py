@@ -70,11 +70,27 @@ class EdgeDetector:
         final_action = "PASS"
         size = None
         veto = None
+        is_micro = False
+
+        research_weak = (judgment.get("research_quality", "medium") or "").lower() in ("low", "medium") or \
+                        (research.key_facts or "").startswith("No strong external signal") or \
+                        not research.sources
 
         if abs(raw_edge) < min_edge:
-            veto = f"Edge {raw_edge:.2%} below minimum threshold {min_edge:.2%}"
-        elif confidence < 0.65:
-            veto = f"Low LLM confidence ({confidence:.0%})"
+            # MICRO LANE: allow tiny exploratory position on weak research when edge is still directionally interesting
+            if research_weak and abs(raw_edge) >= 0.055 and confidence >= 0.42 and volume >= 4000:
+                final_action = "BUY" if raw_edge > 0 else "SELL"
+                is_micro = True
+                rationale = (rationale or "") + " | MICRO: weak research, exploratory $0.10-0.30 only (data gathering)"
+            else:
+                veto = f"Edge {raw_edge:.2%} below minimum threshold {min_edge:.2%}"
+        elif confidence < 0.55:
+            if research_weak and abs(raw_edge) >= 0.05 and confidence >= 0.40 and volume >= 3500:
+                final_action = "BUY" if raw_edge > 0 else "SELL"
+                is_micro = True
+                rationale = (rationale or "") + " | MICRO: low-conf but non-zero signal, micro only"
+            else:
+                veto = f"Low LLM confidence ({confidence:.0%})"
         elif action != "PASS" and volume < 8000:
             veto = "Insufficient volume for reliable edge"
         else:
@@ -93,6 +109,7 @@ class EdgeDetector:
             rationale=rationale if not veto else f"{rationale} | VETO: {veto}",
             sources=research.sources,
             llm_model=usage.get("model"),
+            is_micro_position=is_micro,
         )
 
         logger.info(

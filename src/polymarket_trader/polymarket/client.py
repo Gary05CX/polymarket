@@ -77,29 +77,66 @@ class PolymarketClient:
             # The exact API shape depends on the current beta SDK version.
             # This is intentionally defensive.
             try:
-                # Common pattern in the new SDK
-                markets = await client.list_markets(
+                # New SDK returns a Paginator (synchronous), not an awaitable.
+                paginator = client.list_markets(
                     closed=False,
                     page_size=min(limit, 100),
                 )
-                # Normalize to our internal shape
+
                 result = []
-                for m in markets:
-                    if getattr(m, "volume_usd", 0) or 0 >= min_volume:
+                for m in paginator.items():
+                    metrics = getattr(m, "metrics", None)
+                    vol = float(getattr(metrics, "volume_num", 0) or 0) if metrics else 0
+                    liq = float(getattr(metrics, "liquidity_num", 0) or 0) if metrics else 0
+
+                    if vol >= min_volume:
+                        outcomes = getattr(m, "outcomes", None) or []
+                        implied = 0.5
+                        price_source = "fallback"
+                        try:
+                            # Common Gamma shape: outcomes is list of objects/dicts with "price" for Yes (first or by name)
+                            if isinstance(outcomes, (list, tuple)) and outcomes:
+                                first = outcomes[0]
+                                p = None
+                                if isinstance(first, dict):
+                                    p = first.get("price") or first.get("current_price")
+                                else:
+                                    p = getattr(first, "price", None) or getattr(first, "current_price", None)
+                                if p is not None:
+                                    implied = float(p)
+                                    price_source = "outcomes_yes"
+                            # Fallback: sometimes the market itself carries a price or last_trade_price
+                            if implied == 0.5:
+                                for attr in ("price", "last_trade_price", "implied_prob", "yes_price"):
+                                    val = getattr(m, attr, None)
+                                    if val is not None:
+                                        implied = float(val)
+                                        price_source = f"market_{attr}"
+                                        break
+                        except Exception:
+                            implied = 0.5
+                            price_source = "fallback_error"
+
                         result.append(
                             {
                                 "id": getattr(m, "id", None) or getattr(m, "condition_id", None),
                                 "question": getattr(m, "question", ""),
                                 "slug": getattr(m, "slug", ""),
-                                "volume_usd": getattr(m, "volume_usd", 0),
-                                "liquidity": getattr(m, "liquidity", 0),
+                                "volume_usd": vol,
+                                "liquidity": liq,
                                 "category": getattr(m, "category", None),
                                 "end_date": getattr(m, "end_date", None),
                                 "clob_token_ids": getattr(m, "clob_token_ids", []),
-                                "outcomes": getattr(m, "outcomes", None),
+                                "outcomes": outcomes,
+                                "implied_prob": round(implied, 4),
+                                "price_source": price_source,
                             }
                         )
-                return result[:limit]
+
+                    if len(result) >= limit:
+                        break
+
+                return result
             except Exception as exc:
                 logger.warning("market_list_fallback", error=str(exc))
                 # Return empty on any issue — the agent must be resilient
@@ -111,12 +148,31 @@ class PolymarketClient:
             client = await self._get_public()
             try:
                 m = await client.get_market(id=market_id)
+                outcomes = getattr(m, "outcomes", None) or []
+                implied = 0.5
+                price_source = "fallback"
+                try:
+                    if isinstance(outcomes, (list, tuple)) and outcomes:
+                        first = outcomes[0]
+                        p = None
+                        if isinstance(first, dict):
+                            p = first.get("price") or first.get("current_price")
+                        else:
+                            p = getattr(first, "price", None) or getattr(first, "current_price", None)
+                        if p is not None:
+                            implied = float(p)
+                            price_source = "outcomes_yes"
+                except Exception:
+                    pass
                 return {
                     "id": getattr(m, "id", market_id),
                     "question": getattr(m, "question", ""),
                     "clob_token_ids": getattr(m, "clob_token_ids", []),
                     "minimum_tick_size": getattr(m, "minimum_tick_size", 0.01),
                     "neg_risk": getattr(m, "neg_risk", False),
+                    "implied_prob": round(implied, 4),
+                    "price_source": price_source,
+                    "outcomes": outcomes,
                 }
             except Exception:
                 return None

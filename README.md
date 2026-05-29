@@ -26,6 +26,12 @@ An autonomous AI trading agent whose **sole objective is profitability**, with *
 - The agent can already execute **full decision cycles in dry-run mode** (`run --dry-run`), logging complete reasoning and risk evaluations to DuckDB.
 - Further hardening, testing, monitoring, and live trading integration are still in progress.
 
+**Recent major updates (implemented by Grok Build / xAI Grok 4.3 in this session):**
+- **Persistent Market Intelligence Layer**: The scanner now persists every batch of active markets to DuckDB **first** (as requested). After each run, news/research is used to score markets, and scores are written back. On subsequent cycles the agent uses these prior scores to **cheaply skip** low-value markets — directly solving repeated LLM token waste.
+- Active exploration of diverse market types via historical news scores + category distribution (instead of being stuck on high-volume noisy events like FIFA 2026).
+- **Micro exploratory position lane**: The agent can now propose very small positions ($0.10–0.30) even when research is weak, while **all** principal-protection rules (capital floor, budget, loss circuit breakers, blacklists, etc.) remain strictly enforced. This is the only relaxed path; the main book stays extremely conservative.
+- Multiple robustness improvements: better implied probability extraction from Polymarket data, early exits before expensive LLM calls, and full audit trail for the new scoring system.
+
 **Strong recommendation**: Before using this project, please read this document and `docs/architecture.md` in full. **Always run with `--dry-run` mode** for an extended period before considering any real trading.
 
 Detailed design rationale, risk control rules, system architecture diagram (Mermaid), project structure, and operational flow are provided below.

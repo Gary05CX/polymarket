@@ -9,12 +9,13 @@ All rules are intentionally conservative and hard-coded with safe defaults.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
 from ..config import get_settings
 from ..data.db import get_current_capital
-from ..data.repositories import CostRepo, DecisionRepo, get_summary
+from ..data.repositories import CostRepo, DecisionRepo, get_summary, MarketAssessmentRepo
 from ..logging import get_logger
 
 logger = get_logger(__name__)
@@ -62,6 +63,7 @@ class RiskManager:
         recommended_size_usd: float | None,
         current_positions_count: int = 0,
         market_category: str | None = None,
+        is_micro_position: bool = False,
     ) -> tuple[bool, float | None, str]:
         """
         The central gate. Returns (approved, safe_size_usd, human_readable_reason)
@@ -69,6 +71,36 @@ class RiskManager:
         if edge is None or confidence is None:
             return False, None, "Missing edge or confidence from detector"
 
+        # MICRO EXPLORATORY LANE (only for weak-research tiny positions)
+        # Never relaxes the sacred capital / budget / loss / blacklist breakers.
+        if is_micro_position:
+            micro_min_edge = 0.055
+            micro_min_conf = 0.40
+            if abs(edge) < micro_min_edge:
+                return False, None, f"Micro edge {edge:.2%} < micro floor {micro_min_edge:.2%}"
+            if confidence < micro_min_conf:
+                return False, None, f"Micro confidence {confidence:.0%} too low"
+
+            # Still hard global guards
+            equity = self._current_equity_proxy()
+            if equity < self.initial_capital * 0.995:
+                return False, None, "Current equity below protected principal — trading halted"
+            budget_left = self._api_budget_remaining()
+            if budget_left < 0.60:   # slightly tighter for micros near budget end
+                return False, None, f"API budget too low for even micro ({budget_left:.2f})"
+            if self._recent_losses(24) >= 3:
+                return False, None, "3+ negative edge decisions in last 24h — cooling off"
+            if current_positions_count >= 2:
+                return False, None, "Maximum concurrent positions (2) reached"
+            if market_category and market_category.lower() in [c.lower() for c in self.settings.market_category_blacklist]:
+                return False, None, f"Category {market_category} is blacklisted"
+
+            micro_size = min(0.30, max(0.10, equity * 0.02))
+            reason = f"MICRO | Edge {edge:.2%} | conf {confidence:.0%} | size ${micro_size:.2f} | API left ${budget_left:.2f}"
+            logger.info("risk_micro_approved", size=micro_size, reason=reason[:110])
+            return True, round(micro_size, 2), reason
+
+        # === NORMAL (strict) PATH ===
         min_edge = self.settings.min_edge_percent / 100.0
         if abs(edge) < min_edge:
             return False, None, f"Edge {edge:.2%} < minimum {min_edge:.2%}"
@@ -118,9 +150,9 @@ class RiskManager:
         logger.info("risk_approved", size=safe_size, reason=reason[:120])
         return True, round(safe_size, 2), reason
 
-    def record_decision(self, decision: Any, approved: bool, size: float | None, reason: str) -> int:
+    def record_decision(self, decision: Any, approved: bool, size: float | None, reason: str) -> uuid.UUID:
         """Persist the full decision + veto/approval rationale (immutable audit trail)."""
-        return DecisionRepo.save(
+        decision_id = DecisionRepo.save(
             market_id=getattr(decision, "market_id", "unknown"),
             market_question="",
             market_price=getattr(decision, "market_price", 0.0),
@@ -135,3 +167,18 @@ class RiskManager:
             veto_reason=None if approved else reason,
             paper_trade=self.settings.paper_trading,
         )
+
+        # Log assessment for re-evaluation cooldown and long-term ignore logic
+        try:
+            MarketAssessmentRepo.log_assessment(
+                market_id=getattr(decision, "market_id", "unknown"),
+                edge=getattr(decision, "edge", None),
+                confidence=getattr(decision, "confidence", None),
+                approved=approved,
+                reason=reason,
+                paper_trade=self.settings.paper_trading,
+            )
+        except Exception:
+            pass  # Don't let logging break the main flow
+
+        return decision_id

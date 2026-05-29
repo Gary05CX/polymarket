@@ -62,6 +62,46 @@ class Settings(BaseSettings):
         alias="MARKET_CATEGORY_BLACKLIST",
     )
 
+    # === Market Re-evaluation & Ignoring ===
+    min_reevaluation_hours: int = Field(4, alias="MIN_REEVALUATION_HOURS")
+    max_assessments_before_ignore: int = Field(5, alias="MAX_ASSESSMENTS_BEFORE_IGNORE")
+
+    # === Persistent Market Intelligence (news scoring + skip memory) ===
+    # After scanner fetches the batch we persist it, then score with news and write back.
+    # Next runs use these scores to cheaply skip low-value markets (big token saver).
+    batch_news_scoring_enabled: bool = Field(True, alias="BATCH_NEWS_SCORING_ENABLED")
+    news_score_skip_threshold: float = Field(0.22, alias="NEWS_SCORE_SKIP_THRESHOLD")  # below this → skip LLM
+    news_score_cooldown_hours: int = Field(36, alias="NEWS_SCORE_COOLDOWN_HOURS")
+
+    # === Micro exploratory positions on weak research (only lane that relaxes thresholds) ===
+    # These are tiny data-gathering bets ($0.10-0.30). Main book remains extremely strict.
+    micro_exploratory_enabled: bool = Field(True, alias="MICRO_EXPLORATORY_ENABLED")
+    min_edge_micro_percent: float = Field(5.5, alias="MIN_EDGE_MICRO_PERCENT")
+    min_conf_micro: float = Field(0.40, alias="MIN_CONF_MICRO")
+    micro_max_risk_usd: float = Field(0.30, alias="MICRO_MAX_RISK_USD")
+
+    @field_validator("market_category_blacklist", mode="before")
+    @classmethod
+    def parse_market_category_blacklist(cls, v):
+        """Allow comma-separated string in .env (e.g. 'sports,entertainment') or JSON list."""
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            # Try JSON first (e.g. '["sports","entertainment"]')
+            try:
+                import json
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed]
+            except Exception:
+                pass
+            # Fallback: comma-separated
+            return [item.strip() for item in v.split(",") if item.strip()]
+        if isinstance(v, (list, tuple)):
+            return [str(x).strip() for x in v]
+        return v
+
     @field_validator("polymarket_private_key")
     @classmethod
     def validate_private_key(cls, v: str) -> str:
