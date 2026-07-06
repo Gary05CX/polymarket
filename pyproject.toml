@@ -1,0 +1,11 @@
+[project]
+name = "polymarket"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=2.44.0",
+    "polymarket-client>=0.1.0b13",
+    "requests>=2.34.2",
+]
