@@ -8,3 +8,12 @@ CREATE TABLE log.requests(
     header JSONB NULL, 
     response_body JSONB NULL
 );
+
+CREATE SCHEMA market;
+
+CREATE TABLE market.market(
+    id  INT PRIMARY KEY,
+    degree INT NOT NULL CHECK (degree BETWEEN -100 AND 100),
+    date DATE NOT NULL,
+    
+)
