@@ -1,0 +1,81 @@
+# Polymarket 5m/15m crypto trading bot
+
+# Default: BTC only. Add eth, sol when ready.
+assets:
+  - btc
+
+timeframes:
+  - 5m
+  - 15m
+
+binance:
+  # combined stream base; symbols mapped per asset
+  ws_base: "wss://stream.binance.com:9443/ws"
+  symbols:
+    btc: btcusdt
+    eth: ethusdt
+    sol: solusdt
+  # reject prices older than this (ms)
+  stale_ms: 5000
+
+gamma:
+  base_url: "https://gamma-api.polymarket.com"
+  timeout_ms: 8000
+
+clob:
+  host: "https://clob.polymarket.com"
+  chain_id: 137
+  # true = log signals / write dry_run orders, never post to CLOB
+  dry_run: true
+
+duckdb:
+  path: "data/bot.duckdb"
+
+loop:
+  poll_interval_ms: 1500
+
+discovery:
+  # re-use cached market metadata this long
+  cache_ttl_ms: 10000
+  # also try previous window when within this many seconds of boundary
+  previous_window_grace_sec: 15
+
+fair_value:
+  # P_up = clamp(0.5 + 0.5*tanh(k * score), p_min, p_max)
+  k: "2.5"
+  default_sigma: "0.0015"   # ~0.15% short-horizon move scale
+  p_min: "0.02"
+  p_max: "0.98"
+  vol_window: 60            # samples for realized vol
+
+strategy_a:
+  enabled: true
+  price_min: "0.60"
+  price_max: "0.70"
+  min_edge: "0.03"
+  size_min_usd: "1"
+  size_max_usd: "3"
+  min_seconds_left: 60
+  # limit price: best_bid (maker-ish) | mid | best_ask
+  limit_price_mode: "best_bid"
+
+strategy_b:
+  enabled: true
+  price_move_threshold: "0.0025"  # 0.25%
+  max_size_usd: "5"
+  min_edge: "0.04"
+  max_market_price: "0.75"        # only buy if market mid still <= this
+  min_seconds_left: 45
+  limit_price_mode: "mid"
+
+risk:
+  max_position_usd_per_market: "8"
+  max_open_markets: 4
+  max_daily_loss_usd: "25"
+  max_hourly_loss_usd: "12"
+  # do not open new positions in last N seconds of window (extra safety)
+  hard_min_seconds_left: 20
+
+monitor:
+  log_level: "info"   # debug | info | warn | error
+  # WEBHOOK_URL from env also used when set

@@ -1,0 +1,66 @@
+# Secrets
+.env
+*.pem
+*.key
+*.p12
+credentials*.json
+
+# Local env / secrets variants
+.env.*
+!.env.example
+
+# Binaries
+/bot
+/bot.exe
+/polymarket-bot
+/polymarket-bot.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Runtime data
+data/
+*.duckdb
+*.duckdb.wal
+*.db
+*.log
+bot_smoke_*.log
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local agent / MCP tooling (not part of the bot)
+mcps/
+.cursor/
+.grok/
+.claude/
+.agent/
+.codex/
+.continue/
+
+# Go
+vendor/
+bin/
+dist/
+coverage.out
+*.test
+*.out
+
+# Python leftovers
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.python-version
+uv.lock
+pyproject.toml
+dev.ipynb
+main.py
