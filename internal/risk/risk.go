@@ -15,18 +15,28 @@ import (
 
 // Manager checks signals against risk limits.
 type Manager struct {
-	cfg   config.RiskConfig
-	store *store.Store
+	cfg    config.RiskConfig
+	store  *store.Store
+	dryRun bool
 
-	mu           sync.Mutex
-	halted       bool
-	haltReason   string
-	haltedAt     time.Time
+	mu         sync.Mutex
+	halted     bool
+	haltReason string
+	haltedAt   time.Time
+
+	// reject tallies for periodic summary
+	rejectMu sync.Mutex
+	rejects  map[string]int
 }
 
 // New creates a risk manager.
-func New(cfg config.RiskConfig, st *store.Store) *Manager {
-	return &Manager{cfg: cfg, store: st}
+func New(cfg config.RiskConfig, st *store.Store, dryRun bool) *Manager {
+	return &Manager{
+		cfg:     cfg,
+		store:   st,
+		dryRun:  dryRun,
+		rejects: make(map[string]int),
+	}
 }
 
 // Halted reports if new orders are blocked.
@@ -47,49 +57,86 @@ func (m *Manager) SetHalt(halt bool, reason string) {
 	}
 }
 
+// ConsumeRejectSummary returns and clears reject reason counts.
+func (m *Manager) ConsumeRejectSummary() map[string]int {
+	m.rejectMu.Lock()
+	defer m.rejectMu.Unlock()
+	out := m.rejects
+	m.rejects = make(map[string]int)
+	return out
+}
+
+func (m *Manager) tally(reason string) {
+	m.rejectMu.Lock()
+	m.rejects[reason]++
+	m.rejectMu.Unlock()
+}
+
 // Filter returns allowed signals and reasons for rejected ones.
 func (m *Manager) Filter(ctx context.Context, signals []strategy.Signal) (allowed []strategy.Signal, rejected []string) {
 	if halted, reason := m.Halted(); halted {
 		for _, s := range signals {
-			rejected = append(rejected, fmt.Sprintf("%s %s: circuit breaker (%s)", s.MarketSlug, s.Strategy, reason))
+			msg := fmt.Sprintf("%s %s: circuit breaker (%s)", s.MarketSlug, s.Strategy, reason)
+			rejected = append(rejected, msg)
+			m.tally("circuit_breaker")
 		}
 		return nil, rejected
 	}
 
-	// refresh PnL-based halt
 	if err := m.checkLossLimits(ctx); err != nil {
 		m.SetHalt(true, err.Error())
 		for _, s := range signals {
-			rejected = append(rejected, fmt.Sprintf("%s %s: %v", s.MarketSlug, s.Strategy, err))
+			msg := fmt.Sprintf("%s %s: %v", s.MarketSlug, s.Strategy, err)
+			rejected = append(rejected, msg)
+			m.tally("loss_limit")
 		}
 		return nil, rejected
 	}
 
-	openMarkets, err := m.store.CountOpenMarkets(ctx)
+	now := time.Now().UTC()
+	openMarkets, err := m.store.CountOpenMarkets(ctx, now)
 	if err != nil {
 		rejected = append(rejected, fmt.Sprintf("count open markets: %v", err))
+		m.tally("count_error")
 		return nil, rejected
 	}
 
-	// track new markets we approve this batch
+	batchSeen := map[string]bool{}
 	newMarkets := map[string]bool{}
 
 	for _, s := range signals {
+		key := s.MarketSlug + "|" + s.Strategy
+
 		if m.cfg.HardMinSecondsLeft > 0 && s.SecondsLeft < float64(m.cfg.HardMinSecondsLeft) {
 			rejected = append(rejected, fmt.Sprintf("%s: hard min seconds left", s.MarketSlug))
+			m.tally("hard_min_seconds")
 			continue
 		}
 
-		// size clamps
+		if m.cfg.OneOrderPerStrategy {
+			if batchSeen[key] {
+				rejected = append(rejected, fmt.Sprintf("%s %s: duplicate in batch", s.MarketSlug, s.Strategy))
+				m.tally("batch_dup")
+				continue
+			}
+			exists, err := m.store.HasStrategyOrder(ctx, s.MarketSlug, s.Strategy)
+			if err != nil {
+				rejected = append(rejected, fmt.Sprintf("%s %s: has order check: %v", s.MarketSlug, s.Strategy, err))
+				m.tally("has_order_err")
+				continue
+			}
+			if exists {
+				// Expected after first fill — don't spam reject_summary.
+				rejected = append(rejected, fmt.Sprintf("%s %s: already ordered this window", s.MarketSlug, s.Strategy))
+				continue
+			}
+		}
+
 		if s.Strategy == "A" {
-			// enforced again here as safety
-			if s.SizeUSD.LessThan(decimal.NewFromInt(1)) || s.SizeUSD.GreaterThan(decimal.NewFromInt(3)) {
-				// allow configured range but never above 3 for A as hard cap per spec
-				if s.SizeUSD.GreaterThan(decimal.NewFromInt(3)) {
-					s.SizeUSD = decimal.NewFromInt(3)
-					if !s.Price.IsZero() {
-						s.Size = s.SizeUSD.Div(s.Price)
-					}
+			if s.SizeUSD.GreaterThan(decimal.NewFromInt(3)) {
+				s.SizeUSD = decimal.NewFromInt(3)
+				if !s.Price.IsZero() {
+					s.Size = s.SizeUSD.Div(s.Price)
 				}
 			}
 		}
@@ -100,22 +147,41 @@ func (m *Manager) Filter(ctx context.Context, signals []strategy.Signal) (allowe
 			}
 		}
 
+		if !m.cfg.MaxSpreadDec.IsZero() && !s.BestBid.IsZero() && !s.BestAsk.IsZero() {
+			spread := s.BestAsk.Sub(s.BestBid)
+			if spread.GreaterThan(m.cfg.MaxSpreadDec) {
+				rejected = append(rejected, fmt.Sprintf("%s: spread %s > max %s", s.MarketSlug, spread, m.cfg.MaxSpreadDec))
+				m.tally("max_spread")
+				continue
+			}
+		}
+
+		// Paper fill at mid ONLY in dry-run
+		if m.dryRun && m.cfg.PaperFillAtMid && !s.MarketMid.IsZero() {
+			s.Price = s.MarketMid
+			if !s.Price.IsZero() {
+				s.Size = s.SizeUSD.Div(s.Price)
+			}
+		}
+
 		exposure, err := m.store.MarketExposureUSD(ctx, s.MarketSlug)
 		if err != nil {
 			rejected = append(rejected, fmt.Sprintf("%s: exposure: %v", s.MarketSlug, err))
+			m.tally("exposure_err")
 			continue
 		}
 		if exposure.Add(s.SizeUSD).GreaterThan(m.cfg.MaxPositionUSDPerMarketDec) {
 			rejected = append(rejected, fmt.Sprintf("%s: max position per market (%s+%s > %s)",
 				s.MarketSlug, exposure, s.SizeUSD, m.cfg.MaxPositionUSDPerMarketDec))
+			m.tally("max_position")
 			continue
 		}
 
-		// concurrent markets
 		isNew := exposure.IsZero() && !newMarkets[s.MarketSlug]
 		if isNew {
-			if openMarkets+len(newMarkets) >= m.cfg.MaxOpenMarkets && m.cfg.MaxOpenMarkets > 0 {
+			if m.cfg.MaxOpenMarkets > 0 && openMarkets+len(newMarkets) >= m.cfg.MaxOpenMarkets {
 				rejected = append(rejected, fmt.Sprintf("%s: max open markets %d", s.MarketSlug, m.cfg.MaxOpenMarkets))
+				m.tally("max_open_markets")
 				continue
 			}
 			newMarkets[s.MarketSlug] = true
@@ -123,9 +189,11 @@ func (m *Manager) Filter(ctx context.Context, signals []strategy.Signal) (allowe
 
 		if s.Price.LessThanOrEqual(decimal.Zero) || s.Size.LessThanOrEqual(decimal.Zero) {
 			rejected = append(rejected, fmt.Sprintf("%s: invalid price/size", s.MarketSlug))
+			m.tally("invalid_px")
 			continue
 		}
 
+		batchSeen[key] = true
 		allowed = append(allowed, s)
 	}
 	return allowed, rejected
@@ -145,7 +213,6 @@ func (m *Manager) checkLossLimits(ctx context.Context) error {
 		return fmt.Errorf("hourly pnl: %w", err)
 	}
 
-	// amount_usd negative means loss; trip if sum <= -limit
 	if !m.cfg.MaxDailyLossUSDDec.IsZero() && daily.LessThanOrEqual(m.cfg.MaxDailyLossUSDDec.Neg()) {
 		return fmt.Errorf("daily loss circuit breaker: pnl=%s limit=-%s", daily, m.cfg.MaxDailyLossUSDDec)
 	}

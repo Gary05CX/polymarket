@@ -1,10 +1,10 @@
 .PHONY: build run test tidy clean
 
 build:
-	go build -o bot ./cmd/bot
+	go build -o bot .
 
-run: build
-	./bot
+run:
+	go run .
 
 test:
 	go test ./...

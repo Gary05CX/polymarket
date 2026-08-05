@@ -25,7 +25,7 @@ Orders are **limit GTC** (Strategy A prefers post-only / maker-ish prices). Posi
 ## Project layout
 
 ```text
-cmd/bot/main.go          # entrypoint
+main.go                  # entrypoint (go run .)
 internal/
   config/                # yaml + .env
   discovery/             # slug windows + Gamma API
@@ -56,10 +56,11 @@ cp .env.example .env
 # 3. deps
 go mod tidy
 
-# 4. build
-go build -o bot ./cmd/bot
+# 4. run (dry-run by default)
+go run .
 
-# 5. run (dry-run by default)
+# or build a binary
+go build -o bot .
 ./bot
 ```
 
@@ -67,8 +68,8 @@ On Windows (PowerShell):
 
 ```powershell
 go mod tidy
-go build -o bot.exe ./cmd/bot
-.\bot.exe
+go run .
+# or: go build -o bot.exe . ; .\bot.exe
 ```
 
 ### Config
@@ -83,9 +84,15 @@ Environment overrides (see `.env.example`):
 
 | Variable | Purpose |
 |----------|---------|
+| `DB_DRIVER` | `duckdb` (default) or `postgres` |
+| `DATABASE_URL` | Postgres DSN when `DB_DRIVER=postgres` |
+| `DUCKDB_PATH` | DuckDB file path when using duckdb |
+| `CONFIG_PATH` | e.g. `configs/config.ubuntu.yaml` |
 | `PRIVATE_KEY` | Wallet key for signing |
 | `CLOB_API_KEY` / `CLOB_SECRET` / `CLOB_PASSPHRASE` | Optional L2 creds (auto-derived if empty) |
 | `SIGNATURE_TYPE` | 0=EOA, 1=Proxy, 2=Safe, 3=Deposit |
+
+**Ubuntu + Postgres long-run:** see [`docs/ubuntu-deploy.md`](docs/ubuntu-deploy.md).
 | `FUNDER` | Proxy/deposit funder address |
 | `DRY_RUN` | `true`/`false` override |
 | `WEBHOOK_URL` | Alert on circuit breaker / errors |
@@ -112,10 +119,26 @@ Gamma: `GET https://gamma-api.polymarket.com/events?slug=...`
 ## Risk controls
 
 - Max position USD per market  
-- Max concurrent open markets  
+- Max concurrent **active** open markets (expired windows free slots after settle)  
+- **One order per market × strategy per window** (no double-fire)  
+- Max bid-ask spread filter  
 - Strategy A hard band 1–3 USD; Strategy B ≤ 5 USD  
 - Daily / hourly loss circuit breakers (`pnl_ledger`)  
 - Prefer limit orders; hard min seconds left before expiry  
+
+## Paper settlement (dry-run)
+
+Each tick settles expired windows using **open_price vs close_price** (fallback: last snapshot / live spot):
+
+- Close ≥ open → **Up** wins (shares pay $1)  
+- Else → **Down** wins  
+- Optional `risk.paper_fee_bps` deducted from paper PnL  
+- PnL → `pnl_ledger` (`kind=paper_settle`); positions cleared; orders → `dry_settled`  
+
+Dry-run also pulls **public CLOB orderbooks** (no key) for mid/spread.  
+`paper_fill_at_mid` only applies when `dry_run: true`.
+
+This approximates Chainlink resolution for analytics only.
 
 ## Data
 
@@ -129,7 +152,7 @@ PostgreSQL DDL (for later migration): `db/init_postgresql.sql`.
 
 ```bash
 # build on the server
-go build -o bot ./cmd/bot
+go build -o bot .
 
 # install
 sudo cp systemd/polymarket-bot.service /etc/systemd/system/
@@ -155,7 +178,8 @@ Uses [`github.com/0xNetuser/Polymarket-golang`](https://github.com/0xNetuser/Pol
 
 ```bash
 go test ./...
-go build -o bot ./cmd/bot
+go run .          # dry-run smoke
+go build -o bot .
 ```
 
 ## License

@@ -227,12 +227,6 @@ type combinedMsg struct {
 	Data   json.RawMessage `json:"data"`
 }
 
-type bookTicker struct {
-	Symbol string `json:"s"`
-	Bid    string `json:"b"`
-	Ask    string `json:"a"`
-}
-
 func (f *Feed) handleMessage(data []byte, symbolToAsset map[string]string) {
 	var wrap combinedMsg
 	if err := json.Unmarshal(data, &wrap); err != nil {
@@ -242,14 +236,17 @@ func (f *Feed) handleMessage(data []byte, symbolToAsset map[string]string) {
 	if len(payload) == 0 {
 		payload = data
 	}
-	var bt bookTicker
-	if err := json.Unmarshal(payload, &bt); err != nil {
+
+	// IMPORTANT: Binance bookTicker uses both "b"/"a" (price) and "B"/"A" (qty).
+	// encoding/json is case-insensitive, so a struct field Bid `json:"b"` can be
+	// overwritten by "B" (qty). Parse with exact-key map instead.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &raw); err != nil {
 		return
 	}
-	sym := strings.ToLower(bt.Symbol)
+	sym := strings.ToLower(jsonRawString(raw["s"]))
 	asset, ok := symbolToAsset[sym]
 	if !ok {
-		// try match by stream name
 		for s, a := range symbolToAsset {
 			if strings.Contains(strings.ToLower(wrap.Stream), s) {
 				asset = a
@@ -261,9 +258,16 @@ func (f *Feed) handleMessage(data []byte, symbolToAsset map[string]string) {
 	if !ok {
 		return
 	}
-	bid, err1 := decimal.NewFromString(bt.Bid)
-	ask, err2 := decimal.NewFromString(bt.Ask)
+	bidStr := jsonRawString(raw["b"]) // bid PRICE (not "B" qty)
+	askStr := jsonRawString(raw["a"]) // ask PRICE (not "A" qty)
+	bid, err1 := decimal.NewFromString(bidStr)
+	ask, err2 := decimal.NewFromString(askStr)
 	if err1 != nil || err2 != nil || bid.IsZero() || ask.IsZero() {
+		return
+	}
+	// Sanity: BTC/ETH/SOL spot should never be single-digit when trading majors.
+	// Reject obvious garbage (protects strategy from bad ticks after reconnect).
+	if bid.LessThan(decimal.NewFromInt(1)) || ask.LessThan(decimal.NewFromInt(1)) {
 		return
 	}
 	mid := bid.Add(ask).Div(decimal.NewFromInt(2))
@@ -277,4 +281,16 @@ func (f *Feed) handleMessage(data []byte, symbolToAsset map[string]string) {
 		h = h[len(h)-f.histN:]
 	}
 	f.history[asset] = h
+}
+
+func jsonRawString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	// bare number
+	return strings.Trim(string(raw), "\"")
 }

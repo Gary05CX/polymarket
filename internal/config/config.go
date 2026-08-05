@@ -20,7 +20,8 @@ type Config struct {
 	Binance    BinanceConfig    `yaml:"binance"`
 	Gamma      GammaConfig      `yaml:"gamma"`
 	CLOB       CLOBConfig       `yaml:"clob"`
-	DuckDB     DuckDBConfig     `yaml:"duckdb"`
+	Database   DatabaseConfig   `yaml:"database"`
+	DuckDB     DuckDBConfig     `yaml:"duckdb"` // legacy; prefer database.*
 	Loop       LoopConfig       `yaml:"loop"`
 	Discovery  DiscoveryConfig  `yaml:"discovery"`
 	FairValue  FairValueConfig  `yaml:"fair_value"`
@@ -70,12 +71,32 @@ type CLOBConfig struct {
 	DryRun  bool   `yaml:"dry_run"`
 }
 
+// DatabaseConfig selects backend: duckdb (default) or postgres.
+type DatabaseConfig struct {
+	// Driver: duckdb | postgres (overridden by env DB_DRIVER)
+	Driver string `yaml:"driver"`
+	// DuckDBPath file path (overridden by DUCKDB_PATH)
+	DuckDBPath string `yaml:"duckdb_path"`
+	// PostgresURL e.g. postgres://user:pass@127.0.0.1:5432/polymarket?sslmode=disable
+	// (overridden by DATABASE_URL)
+	PostgresURL string `yaml:"postgres_url"`
+}
+
 type DuckDBConfig struct {
 	Path string `yaml:"path"`
 }
 
 type LoopConfig struct {
 	PollIntervalMs int `yaml:"poll_interval_ms"`
+	// SnapshotEveryNTicks: write price_snapshots every N polls (1 = every tick).
+	SnapshotEveryNTicks int `yaml:"snapshot_every_n_ticks"`
+	// RejectSummaryEveryNTicks: log aggregated risk rejects every N polls (0 = off).
+	RejectSummaryEveryNTicks int `yaml:"reject_summary_every_n_ticks"`
+	// OpenPriceMaxAgeSec: only lock open_price when first seen within this many
+	// seconds after window_start (0 = always first sighting).
+	OpenPriceMaxAgeSec int `yaml:"open_price_max_age_sec"`
+	// CheckpointEveryNTicks: run DuckDB CHECKPOINT every N polls (0 = off).
+	CheckpointEveryNTicks int `yaml:"checkpoint_every_n_ticks"`
 }
 
 func (l LoopConfig) PollInterval() time.Duration {
@@ -111,30 +132,41 @@ type FairValueConfig struct {
 }
 
 type StrategyAConfig struct {
-	Enabled         bool   `yaml:"enabled"`
-	PriceMin        string `yaml:"price_min"`
-	PriceMax        string `yaml:"price_max"`
-	MinEdge         string `yaml:"min_edge"`
-	SizeMinUSD      string `yaml:"size_min_usd"`
-	SizeMaxUSD      string `yaml:"size_max_usd"`
-	MinSecondsLeft  int    `yaml:"min_seconds_left"`
-	LimitPriceMode  string `yaml:"limit_price_mode"`
+	Enabled        bool   `yaml:"enabled"`
+	PriceMin       string `yaml:"price_min"`
+	PriceMax       string `yaml:"price_max"`
+	MinEdge        string `yaml:"min_edge"`
+	// MaxEdge rejects inflated edges (often fair stuck at p_max). Empty = no cap.
+	MaxEdge string `yaml:"max_edge"`
+	// EdgeSlope: required_edge = min_edge + max(0, mid-price_min)*edge_slope
+	// Higher mid (worse payoff) needs more edge. 0 = flat min_edge only.
+	EdgeSlope string `yaml:"edge_slope"`
+	// RejectFairAtClamp: skip when fair is pinned at p_min/p_max.
+	RejectFairAtClamp bool   `yaml:"reject_fair_at_clamp"`
+	SizeMinUSD        string `yaml:"size_min_usd"`
+	SizeMaxUSD        string `yaml:"size_max_usd"`
+	MinSecondsLeft    int    `yaml:"min_seconds_left"`
+	LimitPriceMode    string `yaml:"limit_price_mode"`
 
 	PriceMinDec   decimal.Decimal `yaml:"-"`
 	PriceMaxDec   decimal.Decimal `yaml:"-"`
 	MinEdgeDec    decimal.Decimal `yaml:"-"`
+	MaxEdgeDec    decimal.Decimal `yaml:"-"`
+	EdgeSlopeDec  decimal.Decimal `yaml:"-"`
 	SizeMinUSDDec decimal.Decimal `yaml:"-"`
 	SizeMaxUSDDec decimal.Decimal `yaml:"-"`
 }
 
 type StrategyBConfig struct {
-	Enabled             bool   `yaml:"enabled"`
-	PriceMoveThreshold  string `yaml:"price_move_threshold"`
-	MaxSizeUSD          string `yaml:"max_size_usd"`
-	MinEdge             string `yaml:"min_edge"`
-	MaxMarketPrice      string `yaml:"max_market_price"`
-	MinSecondsLeft      int    `yaml:"min_seconds_left"`
-	LimitPriceMode      string `yaml:"limit_price_mode"`
+	Enabled            bool   `yaml:"enabled"`
+	PriceMoveThreshold string `yaml:"price_move_threshold"`
+	MaxSizeUSD         string `yaml:"max_size_usd"`
+	MinEdge            string `yaml:"min_edge"`
+	MaxMarketPrice     string `yaml:"max_market_price"`
+	MinSecondsLeft     int    `yaml:"min_seconds_left"`
+	LimitPriceMode     string `yaml:"limit_price_mode"`
+	// RejectFairAtClamp: same as A — skip if fair pinned at bounds.
+	RejectFairAtClamp bool `yaml:"reject_fair_at_clamp"`
 
 	PriceMoveThresholdDec decimal.Decimal `yaml:"-"`
 	MaxSizeUSDDec         decimal.Decimal `yaml:"-"`
@@ -148,10 +180,18 @@ type RiskConfig struct {
 	MaxDailyLossUSD         string `yaml:"max_daily_loss_usd"`
 	MaxHourlyLossUSD        string `yaml:"max_hourly_loss_usd"`
 	HardMinSecondsLeft      int    `yaml:"hard_min_seconds_left"`
+	// OneOrderPerStrategy: at most one order per market×strategy per window (default true).
+	OneOrderPerStrategy bool   `yaml:"one_order_per_strategy"`
+	MaxSpread           string `yaml:"max_spread"`
+	// PaperFillAtMid: rewrite limit price to mid for paper PnL (dry_run only).
+	PaperFillAtMid bool `yaml:"paper_fill_at_mid"`
+	// PaperFeeBps: subtract fee from paper PnL on settle (e.g. 200 = 2%).
+	PaperFeeBps int `yaml:"paper_fee_bps"`
 
 	MaxPositionUSDPerMarketDec decimal.Decimal `yaml:"-"`
 	MaxDailyLossUSDDec         decimal.Decimal `yaml:"-"`
 	MaxHourlyLossUSDDec        decimal.Decimal `yaml:"-"`
+	MaxSpreadDec               decimal.Decimal `yaml:"-"`
 }
 
 type MonitorConfig struct {
@@ -217,6 +257,14 @@ func (c *Config) parseDecimals() error {
 	parse("strategy_a.min_edge", c.StrategyA.MinEdge, &c.StrategyA.MinEdgeDec)
 	parse("strategy_a.size_min_usd", c.StrategyA.SizeMinUSD, &c.StrategyA.SizeMinUSDDec)
 	parse("strategy_a.size_max_usd", c.StrategyA.SizeMaxUSD, &c.StrategyA.SizeMaxUSDDec)
+	// optional
+	if strings.TrimSpace(c.StrategyA.MaxEdge) != "" {
+		parse("strategy_a.max_edge", c.StrategyA.MaxEdge, &c.StrategyA.MaxEdgeDec)
+	}
+	if strings.TrimSpace(c.StrategyA.EdgeSlope) == "" {
+		c.StrategyA.EdgeSlope = "0"
+	}
+	parse("strategy_a.edge_slope", c.StrategyA.EdgeSlope, &c.StrategyA.EdgeSlopeDec)
 
 	parse("strategy_b.price_move_threshold", c.StrategyB.PriceMoveThreshold, &c.StrategyB.PriceMoveThresholdDec)
 	parse("strategy_b.max_size_usd", c.StrategyB.MaxSizeUSD, &c.StrategyB.MaxSizeUSDDec)
@@ -226,6 +274,17 @@ func (c *Config) parseDecimals() error {
 	parse("risk.max_position_usd_per_market", c.Risk.MaxPositionUSDPerMarket, &c.Risk.MaxPositionUSDPerMarketDec)
 	parse("risk.max_daily_loss_usd", c.Risk.MaxDailyLossUSD, &c.Risk.MaxDailyLossUSDDec)
 	parse("risk.max_hourly_loss_usd", c.Risk.MaxHourlyLossUSD, &c.Risk.MaxHourlyLossUSDDec)
+	if strings.TrimSpace(c.Risk.MaxSpread) == "" {
+		c.Risk.MaxSpread = "0.05"
+	}
+	parse("risk.max_spread", c.Risk.MaxSpread, &c.Risk.MaxSpreadDec)
+
+	// defaults for new risk flags (yaml false is zero value — treat unset carefully)
+	// OneOrderPerStrategy defaults to true unless explicitly false in yaml with key present;
+	// we enable by default after unmarshal if the field was omitted by checking via pointer is hard —
+	// so default true here when loading: if yaml has one_order_per_strategy: false it stays false.
+	// Problem: zero value is false. Use a post-default: we set default true in config.yaml always.
+	// Also enable paper_fill_at_mid default true in yaml.
 
 	return err
 }
@@ -254,6 +313,22 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("DRY_RUN"); v != "" {
 		c.CLOB.DryRun = strings.EqualFold(v, "true") || v == "1"
 	}
+
+	// Database backend switch (env wins over yaml)
+	if v := strings.TrimSpace(os.Getenv("DB_DRIVER")); v != "" {
+		c.Database.Driver = v
+	}
+	if v := strings.TrimSpace(os.Getenv("DATABASE_URL")); v != "" {
+		c.Database.PostgresURL = v
+	}
+	if v := strings.TrimSpace(os.Getenv("DUCKDB_PATH")); v != "" {
+		c.Database.DuckDBPath = v
+		c.DuckDB.Path = v
+	}
+	// legacy alias
+	if v := strings.TrimSpace(os.Getenv("POSTGRES_URL")); v != "" && c.Database.PostgresURL == "" {
+		c.Database.PostgresURL = v
+	}
 }
 
 func (c *Config) validate() error {
@@ -268,8 +343,33 @@ func (c *Config) validate() error {
 			return fmt.Errorf("unsupported timeframe %q (use 5m or 15m)", tf)
 		}
 	}
+	// Normalize database config (yaml database.* + legacy duckdb.path)
+	if c.Database.DuckDBPath == "" && c.DuckDB.Path != "" {
+		c.Database.DuckDBPath = c.DuckDB.Path
+	}
+	if c.Database.DuckDBPath == "" {
+		c.Database.DuckDBPath = "data/bot.duckdb"
+	}
 	if c.DuckDB.Path == "" {
-		return fmt.Errorf("duckdb.path is required")
+		c.DuckDB.Path = c.Database.DuckDBPath
+	}
+	drv := strings.ToLower(strings.TrimSpace(c.Database.Driver))
+	if drv == "" {
+		drv = "duckdb"
+	}
+	if drv == "postgresql" || drv == "pg" {
+		drv = "postgres"
+	}
+	c.Database.Driver = drv
+	switch drv {
+	case "duckdb":
+		// ok
+	case "postgres":
+		if strings.TrimSpace(c.Database.PostgresURL) == "" {
+			return fmt.Errorf("database.postgres_url or DATABASE_URL required when DB_DRIVER=postgres")
+		}
+	default:
+		return fmt.Errorf("unsupported database.driver %q (use duckdb or postgres)", c.Database.Driver)
 	}
 	if c.CLOB.Host == "" {
 		c.CLOB.Host = "https://clob.polymarket.com"

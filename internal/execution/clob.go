@@ -11,27 +11,41 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// LiveCLOB wraps 0xNetuser/Polymarket-golang V2 client.
+// LiveCLOB wraps 0xNetuser/Polymarket-golang client (L0 read and/or L2 trade).
 type LiveCLOB struct {
 	client *polymarket.ClobClient
 	log    *slog.Logger
+	canTrade bool
 }
 
-// NewLiveCLOB creates an authenticated CLOB client when not dry-run.
-// When dry_run is true, returns a NoopCLOB.
+// NewLiveCLOB creates a CLOB client.
+// Dry-run: L0 read-only (orderbooks) — no private key required.
+// Live: L2 authenticated trading client.
 func NewLiveCLOB(cfg *config.Config, log *slog.Logger) (CLOB, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	if cfg.CLOB.DryRun {
-		log.Info("CLOB dry_run enabled — orders will not be posted")
-		return &NoopCLOB{log: log}, nil
-	}
 
 	host := cfg.CLOB.Host
+	if host == "" {
+		host = "https://clob.polymarket.com"
+	}
 	chainID := cfg.CLOB.ChainID
-	pk := cfg.PrivateKey
+	if chainID == 0 {
+		chainID = 137
+	}
 
+	if cfg.CLOB.DryRun {
+		// Public / L0 client — orderbook only
+		client, err := polymarket.NewClobClient(host, chainID, "", nil, nil, "")
+		if err != nil {
+			return nil, fmt.Errorf("new read-only clob client: %w", err)
+		}
+		log.Info("CLOB dry_run: public orderbook enabled, orders will not be posted")
+		return &LiveCLOB{client: client, log: log, canTrade: false}, nil
+	}
+
+	pk := cfg.PrivateKey
 	var sigType *int
 	if cfg.SignatureType != 0 {
 		st := cfg.SignatureType
@@ -52,8 +66,6 @@ func NewLiveCLOB(cfg *config.Config, log *slog.Logger) (CLOB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new clob client: %w", err)
 	}
-
-	// Derive API key if not provided
 	if creds == nil {
 		derived, err := client.CreateOrDeriveAPIKey(nil)
 		if err != nil {
@@ -62,8 +74,7 @@ func NewLiveCLOB(cfg *config.Config, log *slog.Logger) (CLOB, error) {
 		client.SetAPICreds(derived)
 		log.Info("derived CLOB API credentials")
 	}
-
-	return &LiveCLOB{client: client, log: log}, nil
+	return &LiveCLOB{client: client, log: log, canTrade: true}, nil
 }
 
 // GetBookMid implements CLOB.
@@ -112,6 +123,9 @@ func bookToMid(book *polymarket.OrderBookSummary) OrderBookMid {
 // PlaceLimitBuy implements CLOB.
 func (c *LiveCLOB) PlaceLimitBuy(ctx context.Context, tokenID string, price, size decimal.Decimal, postOnly bool) (string, error) {
 	_ = ctx
+	if !c.canTrade {
+		return "", fmt.Errorf("clob client is read-only (dry_run)")
+	}
 	resp, err := c.client.CreateAndPostOrderV2(
 		&polymarket.OrderArgsV2{
 			TokenID: tokenID,
@@ -140,6 +154,9 @@ func (c *LiveCLOB) PlaceLimitBuy(ctx context.Context, tokenID string, price, siz
 // CancelOrder implements CLOB.
 func (c *LiveCLOB) CancelOrder(ctx context.Context, orderID string) error {
 	_ = ctx
+	if !c.canTrade {
+		return nil
+	}
 	_, err := c.client.Cancel(orderID)
 	return err
 }
@@ -147,6 +164,9 @@ func (c *LiveCLOB) CancelOrder(ctx context.Context, orderID string) error {
 // CancelAll implements CLOB.
 func (c *LiveCLOB) CancelAll(ctx context.Context) error {
 	_ = ctx
+	if !c.canTrade {
+		return nil
+	}
 	_, err := c.client.CancelAll()
 	return err
 }
@@ -167,7 +187,6 @@ func extractOrderIDFromPost(resp *polymarket.PostOrderResultV2) string {
 	if resp == nil {
 		return ""
 	}
-	// Prefer Response map
 	if m, ok := resp.Response.(map[string]interface{}); ok {
 		if id := pickID(m); id != "" {
 			return id
@@ -178,7 +197,6 @@ func extractOrderIDFromPost(resp *polymarket.PostOrderResultV2) string {
 			return id
 		}
 	}
-	// Response might be nested
 	if s, ok := resp.Response.(string); ok && s != "" {
 		return s
 	}
@@ -197,35 +215,4 @@ func pickID(m map[string]interface{}) string {
 	return ""
 }
 
-// NoopCLOB is used in dry-run mode (no network trading).
-type NoopCLOB struct {
-	log *slog.Logger
-}
-
-func (n *NoopCLOB) GetBookMid(ctx context.Context, tokenID string) (OrderBookMid, error) {
-	_ = ctx
-	_ = tokenID
-	return OrderBookMid{}, fmt.Errorf("noop: no orderbook in pure dry-run; use gamma mids")
-}
-
-func (n *NoopCLOB) PlaceLimitBuy(ctx context.Context, tokenID string, price, size decimal.Decimal, postOnly bool) (string, error) {
-	_ = ctx
-	return "", fmt.Errorf("noop clob: dry_run should not call PlaceLimitBuy")
-}
-
-func (n *NoopCLOB) CancelOrder(ctx context.Context, orderID string) error {
-	_ = ctx
-	_ = orderID
-	return nil
-}
-
-func (n *NoopCLOB) CancelAll(ctx context.Context) error {
-	_ = ctx
-	return nil
-}
-
-// Ensure interfaces compile.
-var (
-	_ CLOB = (*LiveCLOB)(nil)
-	_ CLOB = (*NoopCLOB)(nil)
-)
+var _ CLOB = (*LiveCLOB)(nil)

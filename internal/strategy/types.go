@@ -27,11 +27,13 @@ type Signal struct {
 	// Shares = SizeUSD / Price
 	Size decimal.Decimal
 	// Diagnostic
-	MarketMid  decimal.Decimal
-	Fair       decimal.Decimal
-	Edge       decimal.Decimal
-	SpotMove   decimal.Decimal
-	Reason     string
+	MarketMid   decimal.Decimal
+	BestBid     decimal.Decimal
+	BestAsk     decimal.Decimal
+	Fair        decimal.Decimal
+	Edge        decimal.Decimal
+	SpotMove    decimal.Decimal
+	Reason      string
 	SecondsLeft float64
 }
 

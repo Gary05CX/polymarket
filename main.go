@@ -17,6 +17,7 @@ import (
 	"github.com/Gary05CX/polymarket/internal/monitor"
 	"github.com/Gary05CX/polymarket/internal/price"
 	"github.com/Gary05CX/polymarket/internal/risk"
+	"github.com/Gary05CX/polymarket/internal/settle"
 	"github.com/Gary05CX/polymarket/internal/store"
 	"github.com/Gary05CX/polymarket/internal/strategy"
 	"github.com/shopspring/decimal"
@@ -35,7 +36,11 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 
-	st, err := store.Open(cfg.DuckDB.Path, store.SchemaDuckDB)
+	st, err := store.OpenFromOptions(store.OpenOptions{
+		Driver:      cfg.Database.Driver,
+		DuckDBPath:  cfg.Database.DuckDBPath,
+		PostgresDSN: cfg.Database.PostgresURL,
+	})
 	if err != nil {
 		return fmt.Errorf("store: %w", err)
 	}
@@ -50,9 +55,9 @@ func run() error {
 		"assets":     cfg.Assets,
 		"timeframes": cfg.Timeframes,
 		"dry_run":    cfg.CLOB.DryRun,
+		"db_driver":  st.DriverName(),
 	})
 
-	// Price feed — only subscribe configured assets
 	filtered := map[string]string{}
 	for _, a := range cfg.Assets {
 		if sym, ok := cfg.Binance.Symbols[a]; ok {
@@ -65,7 +70,6 @@ func run() error {
 	}
 	defer feed.Stop()
 
-	// wait briefly for first ticks
 	waitPrices(ctx, feed, cfg.Assets, 8*time.Second, log)
 
 	disc := discovery.New(
@@ -80,29 +84,77 @@ func run() error {
 		return fmt.Errorf("clob: %w", err)
 	}
 	exec := execution.New(cfg, clob, st, log)
-	strat := strategy.New(cfg.StrategyA, cfg.StrategyB)
-	rm := risk.New(cfg.Risk, st)
+	strat := strategy.New(cfg.StrategyA, cfg.StrategyB, cfg.FairValue)
+	rm := risk.New(cfg.Risk, st, cfg.CLOB.DryRun)
+	settler := settle.New(st, log, cfg.Risk.PaperFeeBps)
 
 	ticker := time.NewTicker(cfg.Loop.PollInterval())
 	defer ticker.Stop()
 
-	log.Info("entering main loop", "interval", cfg.Loop.PollInterval().String())
+	snapEvery := cfg.Loop.SnapshotEveryNTicks
+	if snapEvery <= 0 {
+		snapEvery = 1
+	}
+	rejectEvery := cfg.Loop.RejectSummaryEveryNTicks
+	checkpointEvery := cfg.Loop.CheckpointEveryNTicks
+	tickN := 0
+	skipTally := map[string]int{}
+
+	log.Info("entering main loop",
+		"interval", cfg.Loop.PollInterval().String(),
+		"snapshot_every", snapEvery,
+		"checkpoint_every", checkpointEvery,
+	)
 
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("shutdown signal received")
-			shutdownCtx, c := context.WithTimeout(context.Background(), 15*time.Second)
+			shutdownCtx, c := context.WithTimeout(context.Background(), 20*time.Second)
 			defer c()
+			lockCloses(shutdownCtx, feed, cfg, st, time.Now().UTC())
+			spotMap := currentSpots(feed, cfg.Assets)
+			if results, err := settler.RunSettlements(shutdownCtx, time.Now().UTC(), spotMap); err != nil {
+				log.Warn("shutdown settle", "err", err)
+			} else if len(results) > 0 {
+				log.Info("shutdown settled markets", "n", len(results))
+			}
 			if err := exec.CancelOpen(shutdownCtx); err != nil {
 				log.Warn("cancel open orders", "err", err)
+			}
+			if err := st.Checkpoint(shutdownCtx); err != nil {
+				log.Warn("checkpoint", "err", err)
 			}
 			mon.Info(shutdownCtx, "bot_stop", "graceful")
 			return nil
 		case <-ticker.C:
-			if err := tick(ctx, cfg, disc, feed, strat, rm, exec, st, mon); err != nil {
+			tickN++
+			if err := tick(ctx, cfg, disc, feed, strat, rm, exec, settler, st, mon, tickN, snapEvery, skipTally); err != nil {
 				log.Error("tick error", "err", err)
 				mon.Warn(ctx, "tick_error", err.Error())
+			}
+			if rejectEvery > 0 && tickN%rejectEvery == 0 {
+				if sum := rm.ConsumeRejectSummary(); len(sum) > 0 {
+					mon.Info(ctx, "reject_summary", sum)
+				}
+				if len(skipTally) > 0 {
+					// copy & clear
+					cp := map[string]int{}
+					for k, v := range skipTally {
+						cp[k] = v
+					}
+					for k := range skipTally {
+						delete(skipTally, k)
+					}
+					mon.Info(ctx, "strategy_skip_summary", cp)
+				}
+			}
+			if checkpointEvery > 0 && tickN%checkpointEvery == 0 {
+				if err := st.Checkpoint(ctx); err != nil {
+					log.Warn("checkpoint", "err", err)
+				} else {
+					log.Debug("duckdb checkpoint ok")
+				}
 			}
 		}
 	}
@@ -135,6 +187,21 @@ func waitPrices(ctx context.Context, feed *price.Feed, assets []string, timeout 
 	log.Warn("binance prices not fully ready; continuing")
 }
 
+func currentSpots(feed *price.Feed, assets []string) map[string]decimal.Decimal {
+	out := make(map[string]decimal.Decimal, len(assets))
+	for _, a := range assets {
+		if px, _, ok := feed.Get(a); ok {
+			out[a] = px
+		}
+	}
+	return out
+}
+
+// lockCloses writes close_price for markets that just ended (best-effort at shutdown).
+func lockCloses(ctx context.Context, feed *price.Feed, cfg *config.Config, st *store.Store, now time.Time) {
+	seedClosePrices(ctx, st, currentSpots(feed, cfg.Assets), now)
+}
+
 func tick(
 	ctx context.Context,
 	cfg *config.Config,
@@ -143,10 +210,34 @@ func tick(
 	strat *strategy.Engine,
 	rm *risk.Manager,
 	exec *execution.Executor,
+	settler *settle.Engine,
 	st *store.Store,
 	mon *monitor.Monitor,
+	tickN, snapEvery int,
+	skipTally map[string]int,
 ) error {
 	now := time.Now().UTC()
+	spotMap := currentSpots(feed, cfg.Assets)
+
+	// 1) Seed close prices for expired markets with open exposure, then paper-settle.
+	seedClosePrices(ctx, st, spotMap, now)
+	results, err := settler.RunSettlements(ctx, now, spotMap)
+	if err != nil {
+		mon.Logger().Warn("settle", "err", err)
+	}
+	for _, r := range results {
+		mon.Info(ctx, "paper_settle", map[string]any{
+			"slug":      r.Slug,
+			"outcome":   r.Outcome,
+			"pnl_usd":   r.PnLUSD.String(),
+			"fee_usd":   r.FeeUSD.String(),
+			"open":      r.Open.String(),
+			"close":     r.Close.String(),
+			"positions": r.Positions,
+		})
+	}
+
+	// 2) Discover active markets
 	markets, err := disc.DiscoverActive(ctx, cfg.Assets, cfg.Timeframes, now)
 	if err != nil {
 		return fmt.Errorf("discovery: %w", err)
@@ -155,10 +246,11 @@ func tick(
 		return errors.New("no active markets")
 	}
 
+	writeSnap := tickN%snapEvery == 0
+	openMaxAge := cfg.Loop.OpenPriceMaxAgeSec
 	var allSignals []strategy.Signal
 
 	for _, m := range markets {
-		// persist market
 		sm := store.Market{
 			Slug:        m.Slug,
 			ConditionID: m.ConditionID,
@@ -179,22 +271,39 @@ func tick(
 		}
 
 		spot, _, spotOK := feed.Get(m.Asset)
+
+		// Lock open_price carefully near window start.
 		if spotOK {
-			// set open price once
 			existing, _ := st.GetMarket(ctx, m.Slug)
-			if existing == nil || existing.OpenPrice == nil || *existing.OpenPrice == "" {
-				op := spot.String()
-				sm.OpenPrice = &op
+			needOpen := existing == nil || existing.OpenPrice == nil || *existing.OpenPrice == ""
+			if needOpen {
+				age := now.Unix() - m.WindowStart
+				if openMaxAge <= 0 || (age >= 0 && age <= int64(openMaxAge)) {
+					op := spot.String()
+					sm.OpenPrice = &op
+				}
 			}
 		}
 		if err := st.UpsertMarket(ctx, sm); err != nil {
 			mon.Logger().Warn("upsert market", "slug", m.Slug, "err", err)
 		}
-		if spotOK {
-			_ = st.SetOpenPrice(ctx, m.Slug, spot.String())
+		if spotOK && sm.OpenPrice != nil {
+			_ = st.SetOpenPrice(ctx, m.Slug, *sm.OpenPrice)
+		} else if spotOK {
+			// late join: still set if empty so strategies can run (document as approximate)
+			existing, _ := st.GetMarket(ctx, m.Slug)
+			if existing == nil || existing.OpenPrice == nil || *existing.OpenPrice == "" {
+				if openMaxAge <= 0 {
+					_ = st.SetOpenPrice(ctx, m.Slug, spot.String())
+				}
+			}
 		}
 
-		// reload open price from DB
+		// Lock close_price when window has ended (safety if still discovered near boundary).
+		if spotOK && !m.EndTime.IsZero() && !now.Before(m.EndTime) {
+			_ = st.SetClosePrice(ctx, m.Slug, spot.String())
+		}
+
 		open := decimal.Zero
 		if row, err := st.GetMarket(ctx, m.Slug); err == nil && row != nil && row.OpenPrice != nil {
 			if d, e := decimal.NewFromString(*row.OpenPrice); e == nil {
@@ -202,28 +311,26 @@ func tick(
 			}
 		}
 		if open.IsZero() && spotOK {
+			// mid-window start without open yet: use spot as provisional open for fair value only
 			open = spot
 		}
 
-		// mids: prefer CLOB book when available; fall back to Gamma
 		midUp, midDown := m.MidUp, m.MidDown
 		bidUp, askUp := m.BestBidUp, m.BestAskUp
 		bidDown, askDown := m.BestBidDown, m.BestAskDown
 
-		if !cfg.CLOB.DryRun {
-			if upBook, downBook, err := exec.RefreshMids(ctx, m.UpTokenID, m.DownTokenID); err == nil {
-				if !upBook.Mid.IsZero() {
-					midUp = upBook.Mid
-					bidUp, askUp = upBook.Bid, upBook.Ask
-				}
-				if !downBook.Mid.IsZero() {
-					midDown = downBook.Mid
-					bidDown, askDown = downBook.Bid, downBook.Ask
-				}
+		// Always try CLOB public book (works in dry_run with L0 client).
+		if upBook, downBook, err := exec.RefreshMids(ctx, m.UpTokenID, m.DownTokenID); err == nil {
+			if !upBook.Mid.IsZero() {
+				midUp = upBook.Mid
+				bidUp, askUp = upBook.Bid, upBook.Ask
+			}
+			if !downBook.Mid.IsZero() {
+				midDown = downBook.Mid
+				bidDown, askDown = downBook.Bid, downBook.Ask
 			}
 		}
 
-		// if one mid missing, use complement
 		if midDown.IsZero() && !midUp.IsZero() {
 			midDown = decimal.NewFromInt(1).Sub(midUp)
 		}
@@ -234,7 +341,6 @@ func tick(
 		windowSec, _ := discovery.TimeframeSeconds(m.Timeframe)
 		secLeft := fairvalue.SecondsLeft(m.EndTime, now)
 		if secLeft == 0 && windowSec > 0 {
-			// estimate from window start if end missing
 			endTs := m.WindowStart + windowSec
 			secLeft = float64(endTs - now.Unix())
 			if secLeft < 0 {
@@ -244,22 +350,27 @@ func tick(
 
 		sigma := feed.RealizedSigma(m.Asset)
 		fv := fairvalue.Compute(cfg.FairValue, open, spot, midUp, midDown, sigma, windowSec, secLeft)
-
 		posUSD, _ := st.PositionUSD(ctx, m.Slug)
 
-		_ = st.InsertSnapshot(ctx, store.Snapshot{
-			Asset:      m.Asset,
-			Spot:       spot.String(),
-			MarketSlug: m.Slug,
-			MidUp:      midUp.String(),
-			MidDown:    midDown.String(),
-			FairUp:     fv.PUp.String(),
-			FairDown:   fv.PDown.String(),
-			OpenPrice:  open.String(),
-		})
+		if writeSnap {
+			_ = st.InsertSnapshot(ctx, store.Snapshot{
+				Asset:      m.Asset,
+				Spot:       spot.String(),
+				MarketSlug: m.Slug,
+				MidUp:      midUp.String(),
+				MidDown:    midDown.String(),
+				FairUp:     fv.PUp.String(),
+				FairDown:   fv.PDown.String(),
+				OpenPrice:  open.String(),
+			})
+		}
 
 		if !spotOK {
 			mon.Logger().Debug("skip market: stale spot", "slug", m.Slug)
+			continue
+		}
+		if open.IsZero() {
+			mon.Logger().Debug("skip market: no open_price yet", "slug", m.Slug)
 			continue
 		}
 
@@ -284,18 +395,26 @@ func tick(
 			SecondsLeft: secLeft,
 			PositionUSD: posUSD,
 		}
-		sigs := strat.Evaluate(in)
+		sigs, skips := strat.Evaluate(in)
 		allSignals = append(allSignals, sigs...)
+		for _, sk := range skips {
+			key := sk.Strategy + ":" + sk.Reason
+			// collapse numeric detail in reason for tally keys
+			if skipTally != nil {
+				skipTally[key]++
+			}
+			mon.Logger().Debug("strategy_skip", "strategy", sk.Strategy, "slug", sk.MarketSlug, "reason", sk.Reason)
+		}
 
 		mon.Logger().Debug("market tick",
 			"slug", m.Slug,
 			"spot", spot.String(),
 			"open", open.String(),
 			"mid_up", midUp.String(),
-			"mid_down", midDown.String(),
 			"fair_up", fv.PUp.String(),
 			"sec_left", secLeft,
 			"signals", len(sigs),
+			"skips", len(skips),
 		)
 	}
 
@@ -327,4 +446,17 @@ func tick(
 		}
 	}
 	return nil
+}
+
+// seedClosePrices sets close_price for unsettled markets whose end_time has passed.
+func seedClosePrices(ctx context.Context, st *store.Store, spotMap map[string]decimal.Decimal, now time.Time) {
+	due, err := st.ListMarketsDueForSettle(ctx, now)
+	if err != nil {
+		return
+	}
+	for _, m := range due {
+		if px, ok := spotMap[m.Asset]; ok && !px.IsZero() {
+			_ = st.SetClosePrice(ctx, m.Slug, px.String())
+		}
+	}
 }

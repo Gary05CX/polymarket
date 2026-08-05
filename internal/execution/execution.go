@@ -113,7 +113,7 @@ func (e *Executor) PlaceSignal(ctx context.Context, sig strategy.Signal) (*store
 	return &o, nil
 }
 
-// CancelOpen cancels all tracked open live orders (and optionally all on exchange).
+// CancelOpen cancels live exchange orders. Dry-run fills are left for settlement.
 func (e *Executor) CancelOpen(ctx context.Context) error {
 	orders, err := e.st.ListOpenOrders(ctx)
 	if err != nil {
@@ -121,8 +121,8 @@ func (e *Executor) CancelOpen(ctx context.Context) error {
 	}
 	var first error
 	for _, o := range orders {
-		if o.Status == "dry_run" {
-			_ = e.st.UpdateOrderStatus(ctx, o.ID, "cancelled", "")
+		// Keep dry_run rows so paper settlement can still resolve them.
+		if o.Status == "dry_run" || o.Status == "dry_filled" {
 			continue
 		}
 		if e.cfg.CLOB.DryRun || o.CLOBOrderID == "" {
@@ -138,7 +138,6 @@ func (e *Executor) CancelOpen(ctx context.Context) error {
 		}
 		_ = e.st.UpdateOrderStatus(ctx, o.ID, "cancelled", o.CLOBOrderID)
 	}
-	// best-effort cancel-all on exchange
 	if !e.cfg.CLOB.DryRun {
 		if err := e.clob.CancelAll(ctx); err != nil {
 			e.log.Warn("cancel all failed", "err", err)

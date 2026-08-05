@@ -1,7 +1,9 @@
 [Unit]
-Description=Polymarket 5m/15m Crypto Trading Bot
-After=network-online.target
+Description=Polymarket 5m Crypto Trading Bot (BTC/ETH)
+After=network-online.target postgresql.service
 Wants=network-online.target
+# If Postgres is on the same host, wait for it:
+# After=network-online.target postgresql.service
 
 [Service]
 Type=simple
@@ -11,14 +13,23 @@ WorkingDirectory=/home/YOUR_USER/polymarket-bot
 ExecStart=/home/YOUR_USER/polymarket-bot/bot
 Restart=always
 RestartSec=8
+
+# Secrets + DB_DRIVER / DATABASE_URL
 EnvironmentFile=/home/YOUR_USER/polymarket-bot/.env
-# Ensure CGO/DuckDB shared libs are found if needed
-Environment=CONFIG_PATH=configs/config.yaml
+
+# Ubuntu long-run config (Postgres preferred via .env)
+Environment=CONFIG_PATH=configs/config.ubuntu.yaml
+
 StandardOutput=journal
 StandardError=journal
-# Hardening (optional; comment out if they break DuckDB/CGO)
+SyslogIdentifier=polymarket-bot
+
+# Hardening (safe with pure-Go Postgres; fine if not using DuckDB/CGO)
 NoNewPrivileges=true
 PrivateTmp=true
+# Limit crash loops flooding journal
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Install]
 WantedBy=multi-user.target

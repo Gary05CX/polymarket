@@ -1,6 +1,8 @@
-# Polymarket 5m/15m crypto trading bot
+# Ubuntu long-run profile: BTC+ETH 5m, dry_run paper trading.
+# Prefer PostgreSQL via .env:
+#   DB_DRIVER=postgres
+#   DATABASE_URL=postgres://polymarket:SECRET@127.0.0.1:5432/polymarket?sslmode=disable
 
-# BTC + ETH only; 5m windows only (15m disabled — overnight paper was worse on 15m)
 assets:
   - btc
   - eth
@@ -23,15 +25,16 @@ gamma:
 clob:
   host: "https://clob.polymarket.com"
   chain_id: 137
+  # keep true until paper results are clearly positive
   dry_run: true
 
-# Database backend — override with env DB_DRIVER=duckdb|postgres
 database:
-  driver: duckdb
+  # overridden by DB_DRIVER env on Ubuntu
+  driver: postgres
   duckdb_path: "data/bot.duckdb"
+  # set via DATABASE_URL in .env (recommended) or uncomment:
   # postgres_url: "postgres://polymarket:CHANGE_ME@127.0.0.1:5432/polymarket?sslmode=disable"
 
-# legacy alias (still works)
 duckdb:
   path: "data/bot.duckdb"
 
@@ -40,7 +43,7 @@ loop:
   snapshot_every_n_ticks: 5
   reject_summary_every_n_ticks: 40
   open_price_max_age_sec: 45
-  # flush WAL → main file (reduces corruption on kill)
+  # only used for DuckDB
   checkpoint_every_n_ticks: 200
 
 discovery:
@@ -56,13 +59,10 @@ fair_value:
 
 strategy_a:
   enabled: true
-  # tighter band: better win/lose asymmetry
   price_min: "0.58"
   price_max: "0.64"
   min_edge: "0.04"
-  # reject inflated edges (usually fair clamped)
   max_edge: "0.12"
-  # required_edge = min_edge + (mid - price_min) * edge_slope
   edge_slope: "0.5"
   reject_fair_at_clamp: true
   size_min_usd: "1"
@@ -72,10 +72,10 @@ strategy_a:
 
 strategy_b:
   enabled: true
-  price_move_threshold: "0.001"   # 0.10%
+  price_move_threshold: "0.001"
   max_size_usd: "5"
   min_edge: "0.04"
-  max_market_price: "0.75"
+  max_market_price: "0.65"
   min_seconds_left: 45
   limit_price_mode: "mid"
   reject_fair_at_clamp: true

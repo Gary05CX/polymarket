@@ -12,7 +12,11 @@ CREATE TABLE IF NOT EXISTS markets (
     end_time        TIMESTAMP,
     event_start     TIMESTAMP,
     open_price      VARCHAR,
+    close_price     VARCHAR,
     title           VARCHAR,
+    settled_at      TIMESTAMP,
+    settle_outcome  VARCHAR,
+    settle_pnl_usd  VARCHAR,
     discovered_at   TIMESTAMP DEFAULT current_timestamp,
     updated_at      TIMESTAMP DEFAULT current_timestamp
 );
