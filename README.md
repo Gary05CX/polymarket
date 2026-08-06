@@ -91,12 +91,20 @@ Environment overrides (see `.env.example`):
 | `PRIVATE_KEY` | Wallet key for signing |
 | `CLOB_API_KEY` / `CLOB_SECRET` / `CLOB_PASSPHRASE` | Optional L2 creds (auto-derived if empty) |
 | `SIGNATURE_TYPE` | 0=EOA, 1=Proxy, 2=Safe, 3=Deposit |
-
-**Ubuntu + Postgres long-run:** see [`docs/ubuntu-deploy.md`](docs/ubuntu-deploy.md).
 | `FUNDER` | Proxy/deposit funder address |
 | `DRY_RUN` | `true`/`false` override |
 | `WEBHOOK_URL` | Alert on circuit breaker / errors |
-| `CONFIG_PATH` | Alternate config path |
+
+## Docs
+
+| Doc | 內容 |
+|-----|------|
+| [`docs/ubuntu-setup.md`](docs/ubuntu-setup.md) | Ubuntu 從零安裝、Postgres、systemd（中文詳解） |
+| [`docs/update-on-ubuntu.md`](docs/update-on-ubuntu.md) | **更新時除了 git pull 還要做什麼**（rebuild / .env / restart） |
+| [`docs/ubuntu-deploy.md`](docs/ubuntu-deploy.md) | 英文短版 checklist |
+| `configs/config.ubuntu.yaml` | Ubuntu 預設（paper 大膽） |
+| `configs/config.ubuntu.paper-bold.yaml` | paper 大膽版 |
+| `configs/config.ubuntu.strict.yaml` | 之後收緊用 |
 
 ## Market discovery
 

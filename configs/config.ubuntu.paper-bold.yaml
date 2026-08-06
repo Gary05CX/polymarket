@@ -1,10 +1,10 @@
-# Ubuntu default long-run profile → points at PAPER-BOLD for sample collection.
-# Strict/conservative copy: configs/config.ubuntu.strict.yaml
+# Ubuntu PAPER-BOLD profile — more trades for data collection.
+# dry_run only. Expect noisier PnL; tighten later after 30–50+ settles.
 #
 # .env:
-#   CONFIG_PATH=configs/config.ubuntu.yaml
+#   CONFIG_PATH=configs/config.ubuntu.paper-bold.yaml
 #   DB_DRIVER=postgres
-#   DATABASE_URL=postgres://polymarket:SECRET@127.0.0.1:5432/polymarket?sslmode=disable
+#   DATABASE_URL=postgres://...
 #   DRY_RUN=true
 
 assets:
@@ -34,6 +34,7 @@ clob:
 database:
   driver: postgres
   duckdb_path: "data/bot.duckdb"
+  # prefer DATABASE_URL in .env
 
 duckdb:
   path: "data/bot.duckdb"
@@ -49,6 +50,7 @@ discovery:
   cache_ttl_ms: 8000
   previous_window_grace_sec: 15
 
+# Slightly looser fair model → fewer "stuck at bound" rejects
 fair_value:
   k: "1.6"
   default_sigma: "0.0025"
@@ -56,12 +58,13 @@ fair_value:
   p_max: "0.92"
   vol_window: 60
 
-# PAPER-BOLD strategy (same as config.ubuntu.paper-bold.yaml)
+# --- Strategy A: wider band, flatter edge, allow clamp ---
 strategy_a:
   enabled: true
   price_min: "0.55"
   price_max: "0.70"
   min_edge: "0.025"
+  # high ceiling so inflated edges still log as trades (paper)
   max_edge: "0.35"
   edge_slope: "0.15"
   reject_fair_at_clamp: false
@@ -70,9 +73,10 @@ strategy_a:
   min_seconds_left: 45
   limit_price_mode: "mid"
 
+# --- Strategy B: easier lag trigger, higher max mid ---
 strategy_b:
   enabled: true
-  price_move_threshold: "0.0008"
+  price_move_threshold: "0.0008"  # 0.08%
   max_size_usd: "5"
   min_edge: "0.03"
   max_market_price: "0.75"
@@ -86,9 +90,11 @@ risk:
   max_daily_loss_usd: "40"
   max_hourly_loss_usd: "20"
   hard_min_seconds_left: 15
+  # keep: no double-fire pollution
   one_order_per_strategy: true
   max_spread: "0.08"
   paper_fill_at_mid: true
+  # slightly lower fee so paper isn't dominated by fees while exploring
   paper_fee_bps: 100
 
 monitor:

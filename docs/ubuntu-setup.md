@@ -615,11 +615,14 @@ journal 時間依系統 timezone。
 
 | 路徑 | 說明 |
 |------|------|
-| `configs/config.ubuntu.yaml` | Ubuntu 策略與市場設定 |
+| `configs/config.ubuntu.yaml` | Ubuntu 預設（目前 = paper 大膽版） |
+| `configs/config.ubuntu.paper-bold.yaml` | paper 大膽版副本 |
+| `configs/config.ubuntu.strict.yaml` | 之後收緊用 |
 | `.env.example` | 環境變數範本 |
 | `systemd/polymarket-bot.service` | systemd unit 範本 |
 | `db/init_postgresql.sql` | Postgres 建表 |
 | `docs/ubuntu-deploy.md` | 較短的英文摘要 |
+| `docs/update-on-ubuntu.md` | **更新時除了 git pull 還要做什麼** |
 
 ---
 

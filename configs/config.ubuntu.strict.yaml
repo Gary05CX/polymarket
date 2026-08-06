@@ -1,0 +1,89 @@
+# Ubuntu STRICT / conservative profile — fewer trades, tighter filters.
+# Switch later after paper-bold collects enough samples:
+#   CONFIG_PATH=configs/config.ubuntu.strict.yaml
+
+assets:
+  - btc
+  - eth
+
+timeframes:
+  - 5m
+
+binance:
+  ws_base: "wss://stream.binance.com:9443/ws"
+  symbols:
+    btc: btcusdt
+    eth: ethusdt
+    sol: solusdt
+  stale_ms: 5000
+
+gamma:
+  base_url: "https://gamma-api.polymarket.com"
+  timeout_ms: 8000
+
+clob:
+  host: "https://clob.polymarket.com"
+  chain_id: 137
+  dry_run: true
+
+database:
+  driver: postgres
+  duckdb_path: "data/bot.duckdb"
+
+duckdb:
+  path: "data/bot.duckdb"
+
+loop:
+  poll_interval_ms: 1500
+  snapshot_every_n_ticks: 5
+  reject_summary_every_n_ticks: 40
+  open_price_max_age_sec: 45
+  checkpoint_every_n_ticks: 200
+
+discovery:
+  cache_ttl_ms: 10000
+  previous_window_grace_sec: 15
+
+fair_value:
+  k: "1.4"
+  default_sigma: "0.0035"
+  p_min: "0.12"
+  p_max: "0.88"
+  vol_window: 60
+
+strategy_a:
+  enabled: true
+  price_min: "0.58"
+  price_max: "0.64"
+  min_edge: "0.04"
+  max_edge: "0.12"
+  edge_slope: "0.5"
+  reject_fair_at_clamp: true
+  size_min_usd: "1"
+  size_max_usd: "3"
+  min_seconds_left: 60
+  limit_price_mode: "mid"
+
+strategy_b:
+  enabled: true
+  price_move_threshold: "0.001"
+  max_size_usd: "5"
+  min_edge: "0.04"
+  max_market_price: "0.65"
+  min_seconds_left: 45
+  limit_price_mode: "mid"
+  reject_fair_at_clamp: true
+
+risk:
+  max_position_usd_per_market: "8"
+  max_open_markets: 4
+  max_daily_loss_usd: "25"
+  max_hourly_loss_usd: "12"
+  hard_min_seconds_left: 20
+  one_order_per_strategy: true
+  max_spread: "0.05"
+  paper_fill_at_mid: true
+  paper_fee_bps: 150
+
+monitor:
+  log_level: "info"
