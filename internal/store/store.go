@@ -369,6 +369,20 @@ WHERE market_slug = ? AND strategy = ?
 	return n > 0, nil
 }
 
+// HasMarketOrder reports whether this market already has any non-failed order (any strategy).
+func (s *Store) HasMarketOrder(ctx context.Context, marketSlug string) (bool, error) {
+	row := s.queryRow(ctx, `
+SELECT COUNT(*) FROM orders
+WHERE market_slug = ?
+  AND status IN ('pending', 'live', 'open', 'dry_run', 'dry_filled', 'dry_settled', 'matched')
+`, marketSlug)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // ListPositions returns all positions for a market.
 func (s *Store) ListPositions(ctx context.Context, marketSlug string) ([]Position, error) {
 	rows, err := s.query(ctx, `

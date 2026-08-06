@@ -181,8 +181,10 @@ type RiskConfig struct {
 	MaxHourlyLossUSD        string `yaml:"max_hourly_loss_usd"`
 	HardMinSecondsLeft      int    `yaml:"hard_min_seconds_left"`
 	// OneOrderPerStrategy: at most one order per market×strategy per window (default true).
-	OneOrderPerStrategy bool   `yaml:"one_order_per_strategy"`
-	MaxSpread           string `yaml:"max_spread"`
+	OneOrderPerStrategy bool `yaml:"one_order_per_strategy"`
+	// OneOrderPerMarket: at most one order total per market window (A and B mutually exclusive).
+	OneOrderPerMarket bool   `yaml:"one_order_per_market"`
+	MaxSpread         string `yaml:"max_spread"`
 	// PaperFillAtMid: rewrite limit price to mid for paper PnL (dry_run only).
 	PaperFillAtMid bool `yaml:"paper_fill_at_mid"`
 	// PaperFeeBps: subtract fee from paper PnL on settle (e.g. 200 = 2%).

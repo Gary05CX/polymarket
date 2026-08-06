@@ -100,11 +100,13 @@ Environment overrides (see `.env.example`):
 | Doc | 內容 |
 |-----|------|
 | [`docs/ubuntu-setup.md`](docs/ubuntu-setup.md) | Ubuntu 從零安裝、Postgres、systemd（中文詳解） |
-| [`docs/update-on-ubuntu.md`](docs/update-on-ubuntu.md) | **更新時除了 git pull 還要做什麼**（rebuild / .env / restart） |
+| [`docs/update-on-ubuntu.md`](docs/update-on-ubuntu.md) | 更新時除了 git pull 還要做什麼 |
+| [`docs/HERMES-UPDATE-AND-RESTART.md`](docs/HERMES-UPDATE-AND-RESTART.md) | **給 Hermes agent：拉取 / 編譯 / 重啟步驟** |
 | [`docs/ubuntu-deploy.md`](docs/ubuntu-deploy.md) | 英文短版 checklist |
-| `configs/config.ubuntu.yaml` | Ubuntu 預設（paper 大膽） |
-| `configs/config.ubuntu.paper-bold.yaml` | paper 大膽版 |
-| `configs/config.ubuntu.strict.yaml` | 之後收緊用 |
+| `configs/config.ubuntu.yaml` | Ubuntu 預設（**half-tight**） |
+| `configs/config.ubuntu.half-tight.yaml` | half-tight 明確檔名 |
+| `configs/config.ubuntu.paper-bold.yaml` | paper 大膽收樣本 |
+| `configs/config.ubuntu.strict.yaml` | 最嚴 |
 
 ## Market discovery
 

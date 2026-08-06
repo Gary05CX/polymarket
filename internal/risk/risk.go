@@ -101,7 +101,8 @@ func (m *Manager) Filter(ctx context.Context, signals []strategy.Signal) (allowe
 		return nil, rejected
 	}
 
-	batchSeen := map[string]bool{}
+	batchSeenStrat := map[string]bool{} // market|strategy
+	batchSeenMarket := map[string]bool{}
 	newMarkets := map[string]bool{}
 
 	for _, s := range signals {
@@ -113,8 +114,27 @@ func (m *Manager) Filter(ctx context.Context, signals []strategy.Signal) (allowe
 			continue
 		}
 
+		// A and B mutually exclusive on the same market window.
+		if m.cfg.OneOrderPerMarket {
+			if batchSeenMarket[s.MarketSlug] {
+				rejected = append(rejected, fmt.Sprintf("%s %s: market already has order in batch", s.MarketSlug, s.Strategy))
+				m.tally("market_batch_dup")
+				continue
+			}
+			exists, err := m.store.HasMarketOrder(ctx, s.MarketSlug)
+			if err != nil {
+				rejected = append(rejected, fmt.Sprintf("%s: has market order check: %v", s.MarketSlug, err))
+				m.tally("has_order_err")
+				continue
+			}
+			if exists {
+				rejected = append(rejected, fmt.Sprintf("%s %s: market already ordered this window", s.MarketSlug, s.Strategy))
+				continue
+			}
+		}
+
 		if m.cfg.OneOrderPerStrategy {
-			if batchSeen[key] {
+			if batchSeenStrat[key] {
 				rejected = append(rejected, fmt.Sprintf("%s %s: duplicate in batch", s.MarketSlug, s.Strategy))
 				m.tally("batch_dup")
 				continue
@@ -193,7 +213,8 @@ func (m *Manager) Filter(ctx context.Context, signals []strategy.Signal) (allowe
 			continue
 		}
 
-		batchSeen[key] = true
+		batchSeenStrat[key] = true
+		batchSeenMarket[s.MarketSlug] = true
 		allowed = append(allowed, s)
 	}
 	return allowed, rejected
