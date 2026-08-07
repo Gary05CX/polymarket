@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS orders (
     status          VARCHAR NOT NULL,
     clob_order_id   VARCHAR,
     reason          VARCHAR,
+    dry_run         BOOLEAN NOT NULL DEFAULT TRUE,
+    error_message   VARCHAR,
     created_at      TIMESTAMP DEFAULT current_timestamp,
     updated_at      TIMESTAMP DEFAULT current_timestamp
 );

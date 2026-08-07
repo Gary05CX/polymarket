@@ -163,13 +163,22 @@ journalctl -u polymarket-bot -f
 ### [E] 對帳 SQL（Postgres）
 
 ```sql
--- 最近訂單（真錢會是 live/open/filled 等，不是 dry_settled）
-SELECT strategy, status, side, price, size_usd, created_at
+-- 最近訂單（dry_run / error_message 從 2026-08 起有欄位）
+SELECT strategy, status, dry_run, price, size_usd,
+       LEFT(error_message, 80) AS err, created_at
 FROM orders
 ORDER BY created_at DESC
 LIMIT 20;
 
--- 結算 PnL
+-- 只看真單
+SELECT * FROM orders WHERE dry_run = false ORDER BY created_at DESC LIMIT 20;
+
+-- 結算 PnL（paper_settle vs live_settle）
+SELECT kind, amount_usd, detail, ts
+FROM pnl_ledger
+WHERE ts > now() - interval '24 hours'
+ORDER BY ts DESC;
+
 SELECT asset, settle_outcome, settle_pnl_usd, settled_at
 FROM markets
 WHERE settled_at > now() - interval '24 hours'

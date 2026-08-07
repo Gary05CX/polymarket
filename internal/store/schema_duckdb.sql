@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS orders (
     status          VARCHAR NOT NULL,
     clob_order_id   VARCHAR,
     reason          VARCHAR,
+    dry_run         BOOLEAN NOT NULL DEFAULT TRUE,
+    error_message   VARCHAR,
     created_at      TIMESTAMP DEFAULT current_timestamp,
     updated_at      TIMESTAMP DEFAULT current_timestamp
 );
@@ -96,5 +98,6 @@ CREATE SEQUENCE IF NOT EXISTS pnl_ledger_id_seq START 1;
 
 CREATE INDEX IF NOT EXISTS idx_orders_market ON orders(market_slug);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_dry_run ON orders(dry_run);
 CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON price_snapshots(ts);
 CREATE INDEX IF NOT EXISTS idx_bot_logs_ts ON bot_logs(ts);

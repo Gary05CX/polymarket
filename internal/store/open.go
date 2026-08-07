@@ -78,11 +78,24 @@ func openDuckDB(path string) (*Store, error) {
 		`ALTER TABLE markets ADD COLUMN IF NOT EXISTS settle_outcome VARCHAR`,
 		`ALTER TABLE markets ADD COLUMN IF NOT EXISTS settle_pnl_usd VARCHAR`,
 		`ALTER TABLE markets ADD COLUMN IF NOT EXISTS close_price VARCHAR`,
+		`ALTER TABLE orders ADD COLUMN IF NOT EXISTS dry_run BOOLEAN DEFAULT TRUE`,
+		`ALTER TABLE orders ADD COLUMN IF NOT EXISTS error_message VARCHAR`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			_, _ = db.Exec(strings.Replace(q, " IF NOT EXISTS", "", 1))
 		}
 	}
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_dry_run ON orders(dry_run)`)
+	// Best-effort backfill for older rows
+	_, _ = db.Exec(`
+UPDATE orders SET dry_run = FALSE
+WHERE COALESCE(dry_run, TRUE) = TRUE
+  AND (
+    status IN ('error', 'cancelled', 'live', 'pending', 'open', 'filled', 'submitted', 'settled', 'matched')
+    OR (clob_order_id IS NOT NULL AND clob_order_id != '' AND clob_order_id NOT LIKE 'dry-%')
+  )
+`)
+	_, _ = db.Exec(`UPDATE orders SET dry_run = TRUE WHERE status LIKE 'dry%'`)
 	return s, nil
 }
 
@@ -111,8 +124,21 @@ func openPostgres(dsn string) (*Store, error) {
 		`ALTER TABLE markets ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ`,
 		`ALTER TABLE markets ADD COLUMN IF NOT EXISTS settle_outcome TEXT`,
 		`ALTER TABLE markets ADD COLUMN IF NOT EXISTS settle_pnl_usd NUMERIC(36, 18)`,
+		`ALTER TABLE orders ADD COLUMN IF NOT EXISTS dry_run BOOLEAN NOT NULL DEFAULT TRUE`,
+		`ALTER TABLE orders ADD COLUMN IF NOT EXISTS error_message TEXT`,
 	} {
 		_, _ = db.Exec(q)
 	}
+	_, _ = db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_dry_run ON orders(dry_run)`)
+	// Best-effort backfill: infer live attempts from status / clob id
+	_, _ = db.Exec(`
+UPDATE orders SET dry_run = FALSE
+WHERE dry_run IS TRUE
+  AND (
+    status IN ('error', 'cancelled', 'live', 'pending', 'open', 'filled', 'submitted', 'settled', 'matched')
+    OR (clob_order_id IS NOT NULL AND clob_order_id <> '' AND clob_order_id NOT LIKE 'dry-%')
+  )
+`)
+	_, _ = db.Exec(`UPDATE orders SET dry_run = TRUE WHERE status LIKE 'dry%'`)
 	return s, nil
 }

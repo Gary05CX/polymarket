@@ -226,7 +226,11 @@ func tick(
 		mon.Logger().Warn("settle", "err", err)
 	}
 	for _, r := range results {
-		mon.Info(ctx, "paper_settle", map[string]any{
+		ev := r.Kind
+		if ev == "" {
+			ev = "paper_settle"
+		}
+		mon.Info(ctx, ev, map[string]any{
 			"slug":      r.Slug,
 			"outcome":   r.Outcome,
 			"pnl_usd":   r.PnLUSD.String(),
@@ -234,6 +238,7 @@ func tick(
 			"open":      r.Open.String(),
 			"close":     r.Close.String(),
 			"positions": r.Positions,
+			"live":      r.Live,
 		})
 	}
 

@@ -20,6 +20,9 @@ type Result struct {
 	Open      decimal.Decimal
 	Close     decimal.Decimal
 	Positions int
+	// Kind is paper_settle or live_settle (matches pnl_ledger.kind).
+	Kind string
+	Live bool
 }
 
 // Engine settles expired markets using open vs close spot (paper resolve).
@@ -163,16 +166,32 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 	r.PnLUSD = totalPnL
 	r.FeeUSD = totalFee
 
+	// Distinguish paper vs live in pnl_ledger (orders.dry_run is source of truth).
+	live, err := e.st.MarketHasLiveOrders(ctx, m.Slug)
+	if err != nil {
+		return r, err
+	}
 	kind := "paper_settle"
+	if live {
+		kind = "live_settle"
+	}
+	r.Kind = kind
+	r.Live = live
 	detail := fmt.Sprintf(
-		`{"slug":%q,"outcome":%q,"open":%q,"close":%q,"positions":%d,"fee_usd":%q,"fee_bps":%d}`,
-		m.Slug, outcome, open.String(), closePx.String(), r.Positions, totalFee.String(), e.feeBps,
+		`{"slug":%q,"outcome":%q,"open":%q,"close":%q,"positions":%d,"fee_usd":%q,"fee_bps":%d,"live":%v}`,
+		m.Slug, outcome, open.String(), closePx.String(), r.Positions, totalFee.String(), e.feeBps, live,
 	)
 	if err := e.st.RecordPnL(ctx, kind, totalPnL, detail); err != nil {
 		return r, err
 	}
+	// Paper orders keep dry_settled; live path uses settled (do not collapse live into dry_*).
 	if err := e.st.MarkOrdersStatus(ctx, m.Slug, "dry_settled", []string{
-		"dry_run", "dry_filled", "pending", "live", "open",
+		"dry_run", "dry_filled",
+	}); err != nil {
+		return r, err
+	}
+	if err := e.st.MarkOrdersStatus(ctx, m.Slug, "settled", []string{
+		"pending", "live", "open", "cancelled",
 	}); err != nil {
 		return r, err
 	}
@@ -191,6 +210,8 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 		"open", open.String(),
 		"close", closePx.String(),
 		"positions", r.Positions,
+		"kind", kind,
+		"live", live,
 	)
 	return r, nil
 }

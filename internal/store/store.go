@@ -40,19 +40,23 @@ type Market struct {
 
 // Order is a bot-placed order record.
 type Order struct {
-	ID          string
-	MarketSlug  string
-	TokenID     string
-	Strategy    string
-	Side        string
-	Price       string
-	Size        string
-	SizeUSD     string
-	Status      string
-	CLOBOrderID string
-	Reason      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           string
+	MarketSlug   string
+	TokenID      string
+	Strategy     string
+	Side         string
+	Price        string
+	Size         string
+	SizeUSD      string
+	Status       string
+	CLOBOrderID  string
+	Reason       string
+	// DryRun is true for paper fills; false when CLOB live path was used.
+	DryRun bool
+	// ErrorMessage is set when Status is "error" (API / validation text).
+	ErrorMessage string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // Position is current exposure on a token.
@@ -201,6 +205,43 @@ FROM markets WHERE slug = ?
 	return &m, nil
 }
 
+// orderSelectCols is the standard column list for scanning Order rows.
+const orderSelectCols = `
+id, market_slug, token_id, strategy, side, price, size, size_usd,
+status, clob_order_id, reason, dry_run, error_message, created_at, updated_at`
+
+func scanOrder(rows interface {
+	Scan(dest ...any) error
+}) (Order, error) {
+	var o Order
+	var clob, reason, errMsg sql.NullString
+	var created, updated sql.NullTime
+	var dryRun bool
+	if err := rows.Scan(
+		&o.ID, &o.MarketSlug, &o.TokenID, &o.Strategy, &o.Side, &o.Price, &o.Size, &o.SizeUSD,
+		&o.Status, &clob, &reason, &dryRun, &errMsg, &created, &updated,
+	); err != nil {
+		return o, err
+	}
+	o.DryRun = dryRun
+	if clob.Valid {
+		o.CLOBOrderID = clob.String
+	}
+	if reason.Valid {
+		o.Reason = reason.String
+	}
+	if errMsg.Valid {
+		o.ErrorMessage = errMsg.String
+	}
+	if created.Valid {
+		o.CreatedAt = created.Time
+	}
+	if updated.Valid {
+		o.UpdatedAt = updated.Time
+	}
+	return o, nil
+}
+
 // InsertOrder stores a new order.
 func (s *Store) InsertOrder(ctx context.Context, o Order) error {
 	if o.ID == "" {
@@ -210,12 +251,12 @@ func (s *Store) InsertOrder(ctx context.Context, o Order) error {
 	const q = `
 INSERT INTO orders (
   id, market_slug, token_id, strategy, side, price, size, size_usd,
-  status, clob_order_id, reason, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  status, clob_order_id, reason, dry_run, error_message, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 	_, err := s.exec(ctx, q,
 		o.ID, o.MarketSlug, o.TokenID, o.Strategy, o.Side, o.Price, o.Size, o.SizeUSD,
-		o.Status, nullStr(o.CLOBOrderID), nullStr(o.Reason), now, now,
+		o.Status, nullStr(o.CLOBOrderID), nullStr(o.Reason), o.DryRun, nullStr(o.ErrorMessage), now, now,
 	)
 	return err
 }
@@ -229,11 +270,19 @@ WHERE id = ?
 	return err
 }
 
+// UpdateOrderError sets status=error and stores the API/error text.
+func (s *Store) UpdateOrderError(ctx context.Context, id, errMsg string) error {
+	_, err := s.exec(ctx, `
+UPDATE orders SET status = ?, error_message = ?, updated_at = ?
+WHERE id = ?
+`, "error", nullStr(errMsg), time.Now().UTC(), id)
+	return err
+}
+
 // ListOpenOrders returns non-terminal orders.
 func (s *Store) ListOpenOrders(ctx context.Context) ([]Order, error) {
-	const q = `
-SELECT id, market_slug, token_id, strategy, side, price, size, size_usd,
-       status, clob_order_id, reason, created_at, updated_at
+	q := `
+SELECT ` + orderSelectCols + `
 FROM orders
 WHERE status IN ('pending', 'live', 'open', 'dry_run')
 ORDER BY created_at
@@ -245,26 +294,9 @@ ORDER BY created_at
 	defer rows.Close()
 	var out []Order
 	for rows.Next() {
-		var o Order
-		var clob, reason sql.NullString
-		var created, updated sql.NullTime
-		if err := rows.Scan(
-			&o.ID, &o.MarketSlug, &o.TokenID, &o.Strategy, &o.Side, &o.Price, &o.Size, &o.SizeUSD,
-			&o.Status, &clob, &reason, &created, &updated,
-		); err != nil {
+		o, err := scanOrder(rows)
+		if err != nil {
 			return nil, err
-		}
-		if clob.Valid {
-			o.CLOBOrderID = clob.String
-		}
-		if reason.Valid {
-			o.Reason = reason.String
-		}
-		if created.Valid {
-			o.CreatedAt = created.Time
-		}
-		if updated.Valid {
-			o.UpdatedAt = updated.Time
 		}
 		out = append(out, o)
 	}
@@ -360,7 +392,7 @@ func (s *Store) HasStrategyOrder(ctx context.Context, marketSlug, strategy strin
 	row := s.queryRow(ctx, `
 SELECT COUNT(*) FROM orders
 WHERE market_slug = ? AND strategy = ?
-  AND status IN ('pending', 'live', 'open', 'dry_run', 'dry_filled', 'dry_settled', 'matched')
+  AND status IN ('pending', 'live', 'open', 'dry_run', 'dry_filled', 'dry_settled', 'settled', 'matched')
 `, marketSlug, strategy)
 	var n int
 	if err := row.Scan(&n); err != nil {
@@ -374,7 +406,7 @@ func (s *Store) HasMarketOrder(ctx context.Context, marketSlug string) (bool, er
 	row := s.queryRow(ctx, `
 SELECT COUNT(*) FROM orders
 WHERE market_slug = ?
-  AND status IN ('pending', 'live', 'open', 'dry_run', 'dry_filled', 'dry_settled', 'matched')
+  AND status IN ('pending', 'live', 'open', 'dry_run', 'dry_filled', 'dry_settled', 'settled', 'matched')
 `, marketSlug)
 	var n int
 	if err := row.Scan(&n); err != nil {
@@ -534,8 +566,7 @@ ORDER BY ts DESC LIMIT 1`
 // ListOrdersForMarket returns orders for a market (any status).
 func (s *Store) ListOrdersForMarket(ctx context.Context, marketSlug string) ([]Order, error) {
 	rows, err := s.query(ctx, `
-SELECT id, market_slug, token_id, strategy, side, price, size, size_usd,
-       status, clob_order_id, reason, created_at, updated_at
+SELECT `+orderSelectCols+`
 FROM orders WHERE market_slug = ?
 ORDER BY created_at
 `, marketSlug)
@@ -545,30 +576,26 @@ ORDER BY created_at
 	defer rows.Close()
 	var out []Order
 	for rows.Next() {
-		var o Order
-		var clob, reason sql.NullString
-		var created, updated sql.NullTime
-		if err := rows.Scan(
-			&o.ID, &o.MarketSlug, &o.TokenID, &o.Strategy, &o.Side, &o.Price, &o.Size, &o.SizeUSD,
-			&o.Status, &clob, &reason, &created, &updated,
-		); err != nil {
+		o, err := scanOrder(rows)
+		if err != nil {
 			return nil, err
-		}
-		if clob.Valid {
-			o.CLOBOrderID = clob.String
-		}
-		if reason.Valid {
-			o.Reason = reason.String
-		}
-		if created.Valid {
-			o.CreatedAt = created.Time
-		}
-		if updated.Valid {
-			o.UpdatedAt = updated.Time
 		}
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+// MarketHasLiveOrders reports whether any non-paper order exists for the market.
+func (s *Store) MarketHasLiveOrders(ctx context.Context, marketSlug string) (bool, error) {
+	row := s.queryRow(ctx, `
+SELECT COUNT(*) FROM orders
+WHERE market_slug = ? AND dry_run = ?
+`, marketSlug, false)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // InsertSnapshot appends a price snapshot.

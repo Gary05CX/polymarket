@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS orders (
     status          TEXT NOT NULL,
     clob_order_id   TEXT,
     reason          TEXT,
+    dry_run         BOOLEAN NOT NULL DEFAULT TRUE,
+    error_message   TEXT,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
@@ -90,6 +92,12 @@ CREATE TABLE IF NOT EXISTS pnl_ledger (
 
 CREATE INDEX IF NOT EXISTS idx_orders_market ON orders(market_slug);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_dry_run ON orders(dry_run);
 CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON price_snapshots(ts);
 CREATE INDEX IF NOT EXISTS idx_bot_logs_ts ON bot_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_pnl_ts ON pnl_ledger(ts);
+
+-- Idempotent upgrades for existing DBs (also applied on bot start):
+-- ALTER TABLE orders ADD COLUMN IF NOT EXISTS dry_run BOOLEAN NOT NULL DEFAULT TRUE;
+-- ALTER TABLE orders ADD COLUMN IF NOT EXISTS error_message TEXT;
+-- CREATE INDEX IF NOT EXISTS idx_orders_dry_run ON orders(dry_run);

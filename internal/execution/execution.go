@@ -87,18 +87,24 @@ func (e *Executor) PlaceSignal(ctx context.Context, sig strategy.Signal) (*store
 		}
 	}
 
+	errMsg := ""
+	if placeErr != nil {
+		errMsg = placeErr.Error()
+	}
 	o := store.Order{
-		ID:          id,
-		MarketSlug:  sig.MarketSlug,
-		TokenID:     sig.TokenID,
-		Strategy:    sig.Strategy,
-		Side:        "BUY",
-		Price:       sig.Price.String(),
-		Size:        sig.Size.String(),
-		SizeUSD:     sig.SizeUSD.String(),
-		Status:      status,
-		CLOBOrderID: clobID,
-		Reason:      sig.Reason,
+		ID:           id,
+		MarketSlug:   sig.MarketSlug,
+		TokenID:      sig.TokenID,
+		Strategy:     sig.Strategy,
+		Side:         "BUY",
+		Price:        sig.Price.String(),
+		Size:         sig.Size.String(),
+		SizeUSD:      sig.SizeUSD.String(),
+		Status:       status,
+		CLOBOrderID:  clobID,
+		Reason:       sig.Reason,
+		DryRun:       e.cfg.CLOB.DryRun,
+		ErrorMessage: errMsg,
 	}
 	if err := e.st.InsertOrder(ctx, o); err != nil {
 		return nil, fmt.Errorf("insert order: %w", err)
