@@ -3,13 +3,16 @@
 # Keep dry_run until multi-day paper is clearly positive.
 #
 # Profiles:
-#   configs/config.ubuntu.yaml              ← this file (half-tight, default)
-#   configs/config.ubuntu.half-tight.yaml   ← same content, explicit name
-#   configs/config.ubuntu.paper-bold.yaml   ← aggressive sample collection
-#   configs/config.ubuntu.strict.yaml       ← most conservative
+#   configs/config.ubuntu.yaml                 ← default half-tight ~$1–3
+#   configs/config.ubuntu.half-tight.yaml      ← this file (same content)
+#   configs/config.ubuntu.half-tight-size5.yaml ← half-tight ~$5 (paper first)
+#   configs/config.ubuntu.live-size2-3.yaml    ← half-tight ~$2–3 + $10 risk caps
+#   configs/config.ubuntu.paper-bold.yaml      ← aggressive sample collection
+#   configs/config.ubuntu.strict.yaml          ← most conservative
+# Live: docs/LIVE-CHECKLIST.md
 #
 # .env:
-#   CONFIG_PATH=configs/config.ubuntu.yaml
+#   CONFIG_PATH=configs/config.ubuntu.half-tight.yaml
 #   DB_DRIVER=postgres
 #   DATABASE_URL=postgres://polymarket:SECRET@127.0.0.1:5432/polymarket?sslmode=disable
 #   DRY_RUN=true

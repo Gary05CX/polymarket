@@ -1,0 +1,103 @@
+# HALF-TIGHT × ~$5 notional (paper first).
+# Same filters as half-tight; only size + risk caps scaled ~×2.5–3.
+#
+# Base size for A ≈ (size_min + size_max) / 2 = $5, then soft-shrinks toward min
+# as mid rises (same as $1 profile: mid 0.55 → larger; mid 0.64 → smaller).
+#
+# .env for paper overnight:
+#   CONFIG_PATH=configs/config.ubuntu.half-tight-size5.yaml
+#   DB_DRIVER=postgres
+#   DATABASE_URL=postgres://...
+#   DRY_RUN=true
+#
+# Keep dry_run:true until you intentionally go live (see docs/LIVE-CHECKLIST.md).
+# After switching, rebuild bot binary — risk hardcaps no longer clip A at $3.
+
+assets:
+  - btc
+  - eth
+
+timeframes:
+  - 5m
+
+binance:
+  ws_base: "wss://stream.binance.com:9443/ws"
+  symbols:
+    btc: btcusdt
+    eth: ethusdt
+    sol: solusdt
+  stale_ms: 5000
+
+gamma:
+  base_url: "https://gamma-api.polymarket.com"
+  timeout_ms: 8000
+
+clob:
+  host: "https://clob.polymarket.com"
+  chain_id: 137
+  dry_run: true
+
+database:
+  driver: postgres
+  duckdb_path: "data/bot.duckdb"
+
+duckdb:
+  path: "data/bot.duckdb"
+
+loop:
+  poll_interval_ms: 1500
+  snapshot_every_n_ticks: 5
+  reject_summary_every_n_ticks: 40
+  open_price_max_age_sec: 45
+  checkpoint_every_n_ticks: 200
+
+discovery:
+  cache_ttl_ms: 8000
+  previous_window_grace_sec: 15
+
+fair_value:
+  k: "1.5"
+  default_sigma: "0.003"
+  p_min: "0.10"
+  p_max: "0.90"
+  vol_window: 60
+
+# A: same edge/band as half-tight; size centered ~$5
+strategy_a:
+  enabled: true
+  price_min: "0.55"
+  price_max: "0.64"
+  min_edge: "0.03"
+  max_edge: "0.20"
+  edge_slope: "0.25"
+  reject_fair_at_clamp: true
+  size_min_usd: "4"
+  size_max_usd: "6"
+  min_seconds_left: 50
+  limit_price_mode: "mid"
+
+# B: same tight filters; size ~$5 if it ever fires
+strategy_b:
+  enabled: true
+  price_move_threshold: "0.0009"
+  max_size_usd: "5"
+  min_edge: "0.035"
+  max_market_price: "0.62"
+  min_seconds_left: 35
+  limit_price_mode: "mid"
+  reject_fair_at_clamp: true
+
+risk:
+  max_position_usd_per_market: "20"
+  max_open_markets: 5
+  max_daily_loss_usd: "80"
+  max_hourly_loss_usd: "40"
+  hard_min_seconds_left: 18
+  one_order_per_strategy: true
+  one_order_per_market: true
+  max_spread: "0.06"
+  paper_fill_at_mid: true
+  paper_fee_bps: 120
+
+monitor:
+  log_level: "info"

@@ -26,10 +26,13 @@ Paper-bold 長跑結果（Postgres 分析）：
 
 設定檔：
 
-- `configs/config.ubuntu.yaml` ← **預設 = half-tight**
+- `configs/config.ubuntu.yaml` ← **預設 = half-tight ~$1–3**
 - `configs/config.ubuntu.half-tight.yaml` ← 同內容
+- `configs/config.ubuntu.half-tight-size5.yaml` ← half-tight **~$5**（仍 dry_run；需 rebuild）
+- `configs/config.ubuntu.live-size2-3.yaml` ← **~$2–3** + 日虧$5/時虧$3（$10 本金）
 - `configs/config.ubuntu.paper-bold.yaml` ← 舊大膽版
 - `configs/config.ubuntu.strict.yaml` ← 最嚴
+- 真錢步驟：`docs/LIVE-CHECKLIST.md`
 
 ---
 

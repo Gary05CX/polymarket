@@ -1,0 +1,106 @@
+# LIVE-oriented half-tight, ~$2–3 per order (for ~$10 bankroll).
+# Strategy band/edge = same as half-tight; only size + risk scaled down.
+#
+# .env (you set these — do not commit secrets):
+#   CONFIG_PATH=configs/config.ubuntu.live-size2-3.yaml
+#   DB_DRIVER=postgres
+#   DATABASE_URL=postgres://...
+#   DRY_RUN=false              # true = paper; false = real CLOB
+#   PRIVATE_KEY=0x...          # Export signer key
+#   FUNDER=0x...               # address with USDC (proxy ≠ signer often)
+#   SIGNATURE_TYPE=1           # 1=PolyProxy common; 0=EOA
+#
+# yaml clob.dry_run stays true as a safe default; env DRY_RUN overrides it.
+# Rebuild not required for yaml-only changes; restart bot after editing.
+# After risk.go size-cap fix: pull+build once if server binary is old.
+
+assets:
+  - btc
+  - eth
+
+timeframes:
+  - 5m
+
+binance:
+  ws_base: "wss://stream.binance.com:9443/ws"
+  symbols:
+    btc: btcusdt
+    eth: ethusdt
+    sol: solusdt
+  stale_ms: 5000
+
+gamma:
+  base_url: "https://gamma-api.polymarket.com"
+  timeout_ms: 8000
+
+clob:
+  host: "https://clob.polymarket.com"
+  chain_id: 137
+  dry_run: true
+
+database:
+  driver: postgres
+  duckdb_path: "data/bot.duckdb"
+
+duckdb:
+  path: "data/bot.duckdb"
+
+loop:
+  poll_interval_ms: 1500
+  snapshot_every_n_ticks: 5
+  reject_summary_every_n_ticks: 40
+  open_price_max_age_sec: 45
+  checkpoint_every_n_ticks: 200
+
+discovery:
+  cache_ttl_ms: 8000
+  previous_window_grace_sec: 15
+
+fair_value:
+  k: "1.5"
+  default_sigma: "0.003"
+  p_min: "0.10"
+  p_max: "0.90"
+  vol_window: 60
+
+# A: half-tight filters; size centered ~$2.5 (min 2 / max 3)
+# base = (2+3)/2 = 2.5; high mid soft-shrinks toward $2
+strategy_a:
+  enabled: true
+  price_min: "0.55"
+  price_max: "0.64"
+  min_edge: "0.03"
+  max_edge: "0.20"
+  edge_slope: "0.25"
+  reject_fair_at_clamp: true
+  size_min_usd: "2"
+  size_max_usd: "3"
+  min_seconds_left: 50
+  limit_price_mode: "mid"
+
+# B: rare; cap $3 so it matches A notional
+strategy_b:
+  enabled: true
+  price_move_threshold: "0.0009"
+  max_size_usd: "3"
+  min_edge: "0.035"
+  max_market_price: "0.62"
+  min_seconds_left: 35
+  limit_price_mode: "mid"
+  reject_fair_at_clamp: true
+
+# Risk for ~$10 bankroll (defaults $30/$15 were larger than the whole wallet)
+risk:
+  max_position_usd_per_market: "4"
+  max_open_markets: 2
+  max_daily_loss_usd: "5"
+  max_hourly_loss_usd: "3"
+  hard_min_seconds_left: 18
+  one_order_per_strategy: true
+  one_order_per_market: true
+  max_spread: "0.06"
+  paper_fill_at_mid: true
+  paper_fee_bps: 120
+
+monitor:
+  log_level: "info"

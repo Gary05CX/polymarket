@@ -152,16 +152,11 @@ func (m *Manager) Filter(ctx context.Context, signals []strategy.Signal) (allowe
 			}
 		}
 
-		if s.Strategy == "A" {
-			if s.SizeUSD.GreaterThan(decimal.NewFromInt(3)) {
-				s.SizeUSD = decimal.NewFromInt(3)
-				if !s.Price.IsZero() {
-					s.Size = s.SizeUSD.Div(s.Price)
-				}
-			}
-		}
-		if s.Strategy == "B" && s.SizeUSD.GreaterThan(decimal.NewFromInt(5)) {
-			s.SizeUSD = decimal.NewFromInt(5)
+		// Hard ceiling for a single order: risk.max_position_usd_per_market.
+		// Strategy sizes come from yaml (size_min/max, max_size_usd) — do not
+		// re-hardcode $3/$5 here or size-scaled profiles silently get clipped.
+		if !m.cfg.MaxPositionUSDPerMarketDec.IsZero() && s.SizeUSD.GreaterThan(m.cfg.MaxPositionUSDPerMarketDec) {
+			s.SizeUSD = m.cfg.MaxPositionUSDPerMarketDec
 			if !s.Price.IsZero() {
 				s.Size = s.SizeUSD.Div(s.Price)
 			}
