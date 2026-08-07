@@ -387,12 +387,13 @@ WHERE m.settled_at IS NULL
 	return n, err
 }
 
-// HasStrategyOrder reports whether this market already has a non-failed order for strategy.
+// HasStrategyOrder reports whether this market already has any order attempt for strategy.
+// Includes error/cancelled: a failed live place must not free the slot for another try
+// (post-only / min-size failures used to spam multiple CLOB attempts per window).
 func (s *Store) HasStrategyOrder(ctx context.Context, marketSlug, strategy string) (bool, error) {
 	row := s.queryRow(ctx, `
 SELECT COUNT(*) FROM orders
 WHERE market_slug = ? AND strategy = ?
-  AND status IN ('pending', 'live', 'open', 'dry_run', 'dry_filled', 'dry_settled', 'settled', 'matched')
 `, marketSlug, strategy)
 	var n int
 	if err := row.Scan(&n); err != nil {
@@ -401,12 +402,12 @@ WHERE market_slug = ? AND strategy = ?
 	return n > 0, nil
 }
 
-// HasMarketOrder reports whether this market already has any non-failed order (any strategy).
+// HasMarketOrder reports whether this market already has any order attempt (any strategy).
+// Any row blocks when one_order_per_market — including status=error and cancelled.
 func (s *Store) HasMarketOrder(ctx context.Context, marketSlug string) (bool, error) {
 	row := s.queryRow(ctx, `
 SELECT COUNT(*) FROM orders
 WHERE market_slug = ?
-  AND status IN ('pending', 'live', 'open', 'dry_run', 'dry_filled', 'dry_settled', 'settled', 'matched')
 `, marketSlug)
 	var n int
 	if err := row.Scan(&n); err != nil {
