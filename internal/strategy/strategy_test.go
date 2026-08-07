@@ -27,7 +27,7 @@ func TestStrategyATriggersInBand(t *testing.T) {
 		SizeMaxUSDDec:     decimal.RequireFromString("3"),
 		MinSecondsLeft:    60,
 		LimitPriceMode:    "mid",
-	}, config.StrategyBConfig{Enabled: false}, testFV())
+	}, config.StrategyBConfig{Enabled: false}, config.StrategyCConfig{Enabled: false}, testFV())
 
 	in := MarketInput{
 		Slug:        "btc-updown-5m-1",
@@ -59,7 +59,7 @@ func TestStrategyARejectsFairClamp(t *testing.T) {
 		SizeMaxUSDDec:     decimal.RequireFromString("3"),
 		MinSecondsLeft:    60,
 		LimitPriceMode:    "mid",
-	}, config.StrategyBConfig{Enabled: false}, testFV())
+	}, config.StrategyBConfig{Enabled: false}, config.StrategyCConfig{Enabled: false}, testFV())
 
 	in := MarketInput{
 		UpTokenID:   "up",
@@ -86,7 +86,7 @@ func TestStrategyARejectsNoEdge(t *testing.T) {
 		SizeMinUSDDec:  decimal.RequireFromString("1"),
 		SizeMaxUSDDec:  decimal.RequireFromString("3"),
 		MinSecondsLeft: 60,
-	}, config.StrategyBConfig{Enabled: false}, testFV())
+	}, config.StrategyBConfig{Enabled: false}, config.StrategyCConfig{Enabled: false}, testFV())
 
 	in := MarketInput{
 		UpTokenID:   "up",
@@ -110,7 +110,7 @@ func TestStrategyBOnSpotMove(t *testing.T) {
 		MinSecondsLeft:        30,
 		LimitPriceMode:        "mid",
 		RejectFairAtClamp:     true,
-	}, testFV())
+	}, config.StrategyCConfig{Enabled: false}, testFV())
 
 	in := MarketInput{
 		Slug:        "btc-updown-5m-1",
@@ -138,7 +138,7 @@ func TestStrategyBSkipMidTooHigh(t *testing.T) {
 		MaxMarketPriceDec:     decimal.RequireFromString("0.75"),
 		MinSecondsLeft:        30,
 		LimitPriceMode:        "mid",
-	}, testFV())
+	}, config.StrategyCConfig{Enabled: false}, testFV())
 
 	in := MarketInput{
 		Slug:        "m",

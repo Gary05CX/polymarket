@@ -1,8 +1,10 @@
-// Package strategy implements Strategy A (stable small) and Strategy B (lag harvest).
+// Package strategy implements Strategy A (stable small), B (lag harvest), and C (70% momentum).
 package strategy
 
 import (
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/Gary05CX/polymarket/internal/config"
 	"github.com/shopspring/decimal"
@@ -15,16 +17,28 @@ type Skip struct {
 	Reason     string
 }
 
-// Engine evaluates A + B.
+// Engine evaluates A + B + C.
 type Engine struct {
 	A  config.StrategyAConfig
 	B  config.StrategyBConfig
+	C  config.StrategyCConfig
 	FV config.FairValueConfig
+
+	// Strategy C runtime: distance history, retrace watch, loss cooldown.
+	cMu                 sync.Mutex
+	cHist               map[string][]distSample // slug -> recent abs(spot-open)
+	cWatch              map[string]cWatch
+	cConsecutiveLosses  int
+	cCooldownUntil        time.Time
 }
 
 // New creates a strategy engine (fair_value bounds used for clamp filters).
-func New(a config.StrategyAConfig, b config.StrategyBConfig, fv config.FairValueConfig) *Engine {
-	return &Engine{A: a, B: b, FV: fv}
+func New(a config.StrategyAConfig, b config.StrategyBConfig, c config.StrategyCConfig, fv config.FairValueConfig) *Engine {
+	return &Engine{
+		A: a, B: b, C: c, FV: fv,
+		cHist:  map[string][]distSample{},
+		cWatch: map[string]cWatch{},
+	}
 }
 
 // Evaluate returns signals and skip reasons (B near-misses, A clamp rejects when useful).
@@ -47,6 +61,24 @@ func (e *Engine) Evaluate(in MarketInput) (signals []Signal, skips []Skip) {
 				skips = append(skips, Skip{
 					Strategy: "B", MarketSlug: in.Slug,
 					Reason: "token_already_signaled_by_A",
+				})
+			}
+		}
+		skips = append(skips, sk...)
+	}
+	if e.C.Enabled {
+		have := map[string]bool{}
+		for _, s := range signals {
+			have[s.TokenID] = true
+		}
+		sigs, sk := e.evalC(in)
+		for _, s := range sigs {
+			if !have[s.TokenID] {
+				signals = append(signals, s)
+			} else {
+				skips = append(skips, Skip{
+					Strategy: "C", MarketSlug: in.Slug,
+					Reason: "token_already_signaled",
 				})
 			}
 		}

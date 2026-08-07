@@ -14,7 +14,7 @@ const (
 
 // Signal is a proposed limit buy.
 type Signal struct {
-	Strategy   string // "A" or "B"
+	Strategy   string // "A", "B", or "C"
 	MarketSlug string
 	Asset      string
 	Timeframe  string
@@ -57,6 +57,8 @@ type MarketInput struct {
 	EdgeUp      decimal.Decimal
 	EdgeDown    decimal.Decimal
 	SecondsLeft float64
+	// ElapsedSec is seconds since window start (5m ⇒ ~0–300).
+	ElapsedSec float64
 	// existing exposure on this market (USD)
 	PositionUSD decimal.Decimal
 }

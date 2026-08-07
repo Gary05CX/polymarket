@@ -56,6 +56,9 @@ func run() error {
 		"timeframes": cfg.Timeframes,
 		"dry_run":    cfg.CLOB.DryRun,
 		"db_driver":  st.DriverName(),
+		"strategy_a": cfg.StrategyA.Enabled,
+		"strategy_b": cfg.StrategyB.Enabled,
+		"strategy_c": cfg.StrategyC.Enabled,
 	})
 
 	filtered := map[string]string{}
@@ -84,7 +87,7 @@ func run() error {
 		return fmt.Errorf("clob: %w", err)
 	}
 	exec := execution.New(cfg, clob, st, log)
-	strat := strategy.New(cfg.StrategyA, cfg.StrategyB, cfg.FairValue)
+	strat := strategy.New(cfg.StrategyA, cfg.StrategyB, cfg.StrategyC, cfg.FairValue)
 	rm := risk.New(cfg.Risk, st, cfg.CLOB.DryRun)
 	settler := settle.New(st, log, cfg.Risk.PaperFeeBps)
 
@@ -240,6 +243,23 @@ func tick(
 			"positions": r.Positions,
 			"live":      r.Live,
 		})
+		// Strategy C loss streak / cooldown (manual 70% profile).
+		if cfg.StrategyC.Enabled {
+			if orders, err := st.ListOrdersForMarket(ctx, r.Slug); err == nil {
+				for _, o := range orders {
+					if o.Strategy == "C" {
+						strat.RecordCOutcome(r.PnLUSD)
+						if !strat.CCooldownUntil().IsZero() && time.Now().Before(strat.CCooldownUntil()) {
+							mon.Info(ctx, "strategy_c_cooldown", map[string]any{
+								"until":   strat.CCooldownUntil().UTC().Format(time.RFC3339),
+								"pnl_usd": r.PnLUSD.String(),
+							})
+						}
+						break
+					}
+				}
+			}
+		}
 	}
 
 	// 2) Discover active markets
@@ -352,6 +372,18 @@ func tick(
 				secLeft = 0
 			}
 		}
+		elapsedSec := 0.0
+		if m.WindowStart > 0 {
+			elapsedSec = float64(now.Unix() - m.WindowStart)
+			if elapsedSec < 0 {
+				elapsedSec = 0
+			}
+		} else if windowSec > 0 && secLeft >= 0 {
+			elapsedSec = float64(windowSec) - secLeft
+			if elapsedSec < 0 {
+				elapsedSec = 0
+			}
+		}
 
 		sigma := feed.RealizedSigma(m.Asset)
 		fv := fairvalue.Compute(cfg.FairValue, open, spot, midUp, midDown, sigma, windowSec, secLeft)
@@ -398,6 +430,7 @@ func tick(
 			EdgeUp:      fv.EdgeUp,
 			EdgeDown:    fv.EdgeDown,
 			SecondsLeft: secLeft,
+			ElapsedSec:  elapsedSec,
 			PositionUSD: posUSD,
 		}
 		sigs, skips := strat.Evaluate(in)

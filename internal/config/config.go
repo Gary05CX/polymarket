@@ -27,6 +27,7 @@ type Config struct {
 	FairValue  FairValueConfig  `yaml:"fair_value"`
 	StrategyA  StrategyAConfig  `yaml:"strategy_a"`
 	StrategyB  StrategyBConfig  `yaml:"strategy_b"`
+	StrategyC  StrategyCConfig  `yaml:"strategy_c"` // manual 70% momentum (optional)
 	Risk       RiskConfig       `yaml:"risk"`
 	Monitor    MonitorConfig    `yaml:"monitor"`
 
@@ -174,6 +175,38 @@ type StrategyBConfig struct {
 	MaxMarketPriceDec     decimal.Decimal `yaml:"-"`
 }
 
+// StrategyCConfig is the manual "70% momentum" profile (distance from open + ~0.70 mid).
+type StrategyCConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// SizeUSD fixed notional per order (e.g. "5").
+	SizeUSD string `yaml:"size_usd"`
+	// MinElapsedSec: window must be this old (e.g. 120 = 2 minutes into 5m).
+	MinElapsedSec int `yaml:"min_elapsed_sec"`
+	// Move thresholds in USD vs window open/target.
+	BTCMoveUSD string `yaml:"btc_move_usd"`
+	ETHMoveUSD string `yaml:"eth_move_usd"`
+	// Mid band for the leading side (~70%; exclude 90%+ by default).
+	MidMin string `yaml:"mid_min"`
+	MidMax string `yaml:"mid_max"`
+	MinSecondsLeft int    `yaml:"min_seconds_left"`
+	LimitPriceMode string `yaml:"limit_price_mode"`
+	// Stability: if price is retracing toward target, wait then re-check.
+	StabilityWaitSec     int    `yaml:"stability_wait_sec"`     // e.g. 45 (30–60)
+	StabilityLookbackSec int    `yaml:"stability_lookback_sec"` // compare abs-move vs this many seconds ago
+	// RetraceEpsilonUSD: abs-move must fall by more than this to count as retracing.
+	RetraceEpsilonUSD string `yaml:"retrace_epsilon_usd"`
+	// After this many consecutive settled losses, pause new C signals.
+	MaxConsecutiveLosses int `yaml:"max_consecutive_losses"`
+	CooldownSec              int `yaml:"cooldown_sec"` // e.g. 2700 = 45m
+
+	SizeUSDDec          decimal.Decimal `yaml:"-"`
+	BTCMoveUSDDec       decimal.Decimal `yaml:"-"`
+	ETHMoveUSDDec       decimal.Decimal `yaml:"-"`
+	MidMinDec           decimal.Decimal `yaml:"-"`
+	MidMaxDec           decimal.Decimal `yaml:"-"`
+	RetraceEpsilonUSDDec decimal.Decimal `yaml:"-"`
+}
+
 type RiskConfig struct {
 	MaxPositionUSDPerMarket string `yaml:"max_position_usd_per_market"`
 	MaxOpenMarkets          int    `yaml:"max_open_markets"`
@@ -272,6 +305,37 @@ func (c *Config) parseDecimals() error {
 	parse("strategy_b.max_size_usd", c.StrategyB.MaxSizeUSD, &c.StrategyB.MaxSizeUSDDec)
 	parse("strategy_b.min_edge", c.StrategyB.MinEdge, &c.StrategyB.MinEdgeDec)
 	parse("strategy_b.max_market_price", c.StrategyB.MaxMarketPrice, &c.StrategyB.MaxMarketPriceDec)
+
+	// Strategy C optional — only required when enabled.
+	if c.StrategyC.Enabled {
+		if c.StrategyC.MinElapsedSec <= 0 {
+			c.StrategyC.MinElapsedSec = 120
+		}
+		if c.StrategyC.StabilityWaitSec <= 0 {
+			c.StrategyC.StabilityWaitSec = 45
+		}
+		if c.StrategyC.StabilityLookbackSec <= 0 {
+			c.StrategyC.StabilityLookbackSec = 30
+		}
+		if c.StrategyC.MaxConsecutiveLosses <= 0 {
+			c.StrategyC.MaxConsecutiveLosses = 2
+		}
+		if c.StrategyC.CooldownSec <= 0 {
+			c.StrategyC.CooldownSec = 45 * 60
+		}
+		if strings.TrimSpace(c.StrategyC.LimitPriceMode) == "" {
+			c.StrategyC.LimitPriceMode = "mid"
+		}
+		if strings.TrimSpace(c.StrategyC.RetraceEpsilonUSD) == "" {
+			c.StrategyC.RetraceEpsilonUSD = "0.3"
+		}
+		parse("strategy_c.size_usd", c.StrategyC.SizeUSD, &c.StrategyC.SizeUSDDec)
+		parse("strategy_c.btc_move_usd", c.StrategyC.BTCMoveUSD, &c.StrategyC.BTCMoveUSDDec)
+		parse("strategy_c.eth_move_usd", c.StrategyC.ETHMoveUSD, &c.StrategyC.ETHMoveUSDDec)
+		parse("strategy_c.mid_min", c.StrategyC.MidMin, &c.StrategyC.MidMinDec)
+		parse("strategy_c.mid_max", c.StrategyC.MidMax, &c.StrategyC.MidMaxDec)
+		parse("strategy_c.retrace_epsilon_usd", c.StrategyC.RetraceEpsilonUSD, &c.StrategyC.RetraceEpsilonUSDDec)
+	}
 
 	parse("risk.max_position_usd_per_market", c.Risk.MaxPositionUSDPerMarket, &c.Risk.MaxPositionUSDPerMarketDec)
 	parse("risk.max_daily_loss_usd", c.Risk.MaxDailyLossUSD, &c.Risk.MaxDailyLossUSDDec)
