@@ -12,33 +12,33 @@ func testC() config.StrategyCConfig {
 	return config.StrategyCConfig{
 		Enabled:              true,
 		SizeUSDDec:           decimal.RequireFromString("5"),
-		MinElapsedSec:        120,
-		BTCMoveUSDDec:        decimal.RequireFromString("10"),
-		ETHMoveUSDDec:        decimal.RequireFromString("1"),
-		MidMinDec:            decimal.RequireFromString("0.65"),
-		MidMaxDec:            decimal.RequireFromString("0.75"),
+		MinElapsedSec:        60,
+		SustainedAboveSec:    2, // short for tests
+		BTCMoveUSDDec:        decimal.RequireFromString("2"),
+		ETHMoveUSDDec:        decimal.RequireFromString("0.2"),
+		MidMinDec:            decimal.RequireFromString("0.55"),
+		MidMaxDec:            decimal.RequireFromString("0.88"),
 		MinSecondsLeft:       20,
 		LimitPriceMode:       "mid",
-		StabilityWaitSec:     2, // short for tests
+		StabilityWaitSec:     2,
 		StabilityLookbackSec: 2,
-		RetraceEpsilonUSDDec: decimal.RequireFromString("0.3"),
+		RetraceEpsilonUSDDec: decimal.RequireFromString("0.15"),
 		MaxConsecutiveLosses: 2,
 		CooldownSec:            60,
 	}
 }
 
-func TestStrategyCTriggersOnBTCMove(t *testing.T) {
+func TestStrategyCTriggersAfterSustain(t *testing.T) {
 	e := New(
 		config.StrategyAConfig{Enabled: false},
 		config.StrategyBConfig{Enabled: false},
 		testC(),
 		testFV(),
 	)
-	// Seed history so not "retracing" (abs flat/growing).
 	slug := "btc-updown-5m-c"
-	now := time.Now().UTC()
-	e.recordDist(slug, now.Add(-3*time.Second), decimal.RequireFromString("9"))
-	e.recordDist(slug, now.Add(-1*time.Second), decimal.RequireFromString("11"))
+	// Growing abs move (not retracing).
+	e.recordDist(slug, time.Now().UTC().Add(-3*time.Second), decimal.RequireFromString("2.5"))
+	e.recordDist(slug, time.Now().UTC(), decimal.RequireFromString("3.0"))
 
 	in := MarketInput{
 		Slug:        slug,
@@ -46,25 +46,30 @@ func TestStrategyCTriggersOnBTCMove(t *testing.T) {
 		UpTokenID:   "up",
 		DownTokenID: "down",
 		OpenPrice:   decimal.RequireFromString("65000"),
-		Spot:        decimal.RequireFromString("65012"), // +12 > 10
+		Spot:        decimal.RequireFromString("65003"), // +3 > 2
 		MidUp:       decimal.RequireFromString("0.70"),
 		MidDown:     decimal.RequireFromString("0.30"),
-		ElapsedSec:  150,
+		ElapsedSec:  90,
 		SecondsLeft: 150,
 	}
-	sigs, _ := e.Evaluate(in)
-	if len(sigs) != 1 {
-		t.Fatalf("want 1 signal, got %d", len(sigs))
+	// First tick: starts sustain, no signal yet.
+	sigs, skips := e.Evaluate(in)
+	if len(sigs) != 0 {
+		t.Fatalf("first tick should wait sustain, got %+v", sigs)
 	}
-	if sigs[0].Strategy != "C" || sigs[0].Outcome != SideUp {
-		t.Fatalf("unexpected signal: %+v", sigs[0])
+	if len(skips) == 0 {
+		t.Fatal("want sustain_waiting skip")
 	}
-	if !sigs[0].SizeUSD.Equal(decimal.RequireFromString("5")) {
-		t.Fatalf("size %s", sigs[0].SizeUSD)
+	time.Sleep(2100 * time.Millisecond)
+	e.recordDist(slug, time.Now().UTC(), decimal.RequireFromString("3.1"))
+	in.Spot = decimal.RequireFromString("65003.1")
+	sigs, _ = e.Evaluate(in)
+	if len(sigs) != 1 || sigs[0].Strategy != "C" || sigs[0].Outcome != SideUp {
+		t.Fatalf("want C Up after sustain, got %+v", sigs)
 	}
 }
 
-func TestStrategyCSkipsWhenMidTooHigh(t *testing.T) {
+func TestStrategyCSkipsBeforeOneMinute(t *testing.T) {
 	e := New(
 		config.StrategyAConfig{Enabled: false},
 		config.StrategyBConfig{Enabled: false},
@@ -72,66 +77,52 @@ func TestStrategyCSkipsWhenMidTooHigh(t *testing.T) {
 		testFV(),
 	)
 	in := MarketInput{
-		Slug:        "btc-c2",
+		Slug:        "btc-early",
 		Asset:       "btc",
 		UpTokenID:   "up",
 		DownTokenID: "down",
 		OpenPrice:   decimal.RequireFromString("65000"),
-		Spot:        decimal.RequireFromString("65020"),
-		MidUp:       decimal.RequireFromString("0.92"),
-		MidDown:     decimal.RequireFromString("0.08"),
-		ElapsedSec:  150,
-		SecondsLeft: 150,
+		Spot:        decimal.RequireFromString("65010"),
+		MidUp:       decimal.RequireFromString("0.70"),
+		ElapsedSec:  30, // < 60
+		SecondsLeft: 270,
 	}
 	sigs, _ := e.Evaluate(in)
 	if len(sigs) != 0 {
-		t.Fatalf("want skip high mid, got %+v", sigs)
+		t.Fatalf("too early, got %+v", sigs)
 	}
 }
 
-func TestStrategyCRetraceWaitThenUnstable(t *testing.T) {
+func TestStrategyCETHThreshold(t *testing.T) {
 	cfg := testC()
-	cfg.StabilityWaitSec = 1
-	cfg.StabilityLookbackSec = 2
+	cfg.SustainedAboveSec = 1
 	e := New(
 		config.StrategyAConfig{Enabled: false},
 		config.StrategyBConfig{Enabled: false},
 		cfg,
 		testFV(),
 	)
-	slug := "eth-c-retrace"
-	// Past far, now closer to open → retracing.
-	e.recordDist(slug, time.Now().UTC().Add(-3*time.Second), decimal.RequireFromString("3.0"))
-	e.recordDist(slug, time.Now().UTC(), decimal.RequireFromString("1.2"))
-
+	slug := "eth-c"
+	e.recordDist(slug, time.Now().UTC().Add(-2*time.Second), decimal.RequireFromString("0.25"))
 	in := MarketInput{
 		Slug:        slug,
 		Asset:       "eth",
 		UpTokenID:   "up",
 		DownTokenID: "down",
 		OpenPrice:   decimal.RequireFromString("2000"),
-		Spot:        decimal.RequireFromString("2001.2"), // abs 1.2 >= 1 thr
-		MidUp:       decimal.RequireFromString("0.70"),
-		MidDown:     decimal.RequireFromString("0.30"),
-		ElapsedSec:  150,
+		Spot:        decimal.RequireFromString("1999.7"), // abs 0.3 > 0.2 Down
+		MidUp:       decimal.RequireFromString("0.35"),
+		MidDown:     decimal.RequireFromString("0.65"),
+		ElapsedSec:  90,
 		SecondsLeft: 150,
 	}
-	sigs, skips := e.Evaluate(in)
-	if len(sigs) != 0 {
-		t.Fatalf("should wait on retrace, got sigs %+v", sigs)
-	}
-	if len(skips) == 0 {
-		t.Fatal("want retrace skip reason")
-	}
-
-	// Still retracing after wait deadline.
+	e.Evaluate(in)
 	time.Sleep(1100 * time.Millisecond)
-	e.recordDist(slug, time.Now().UTC().Add(-3*time.Second), decimal.RequireFromString("3.0"))
-	e.recordDist(slug, time.Now().UTC(), decimal.RequireFromString("1.1"))
-	in.Spot = decimal.RequireFromString("2001.1")
-	sigs, skips = e.Evaluate(in)
-	if len(sigs) != 0 {
-		t.Fatalf("still unstable, want no signal, got %+v skips=%v", sigs, skips)
+	e.recordDist(slug, time.Now().UTC(), decimal.RequireFromString("0.35"))
+	in.Spot = decimal.RequireFromString("1999.65")
+	sigs, _ := e.Evaluate(in)
+	if len(sigs) != 1 || sigs[0].Outcome != SideDown {
+		t.Fatalf("want ETH Down, got %+v", sigs)
 	}
 }
 

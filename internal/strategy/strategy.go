@@ -24,20 +24,22 @@ type Engine struct {
 	C  config.StrategyCConfig
 	FV config.FairValueConfig
 
-	// Strategy C runtime: distance history, retrace watch, loss cooldown.
-	cMu                 sync.Mutex
-	cHist               map[string][]distSample // slug -> recent abs(spot-open)
-	cWatch              map[string]cWatch
-	cConsecutiveLosses  int
-	cCooldownUntil        time.Time
+	// Strategy C runtime: distance history, retrace watch, sustain clock, loss cooldown.
+	cMu                sync.Mutex
+	cHist              map[string][]distSample // slug -> recent abs(spot-open)
+	cWatch             map[string]cWatch
+	cSustain           map[string]cSustain // |move| held above thr after min elapsed
+	cConsecutiveLosses int
+	cCooldownUntil       time.Time
 }
 
 // New creates a strategy engine (fair_value bounds used for clamp filters).
 func New(a config.StrategyAConfig, b config.StrategyBConfig, c config.StrategyCConfig, fv config.FairValueConfig) *Engine {
 	return &Engine{
 		A: a, B: b, C: c, FV: fv,
-		cHist:  map[string][]distSample{},
-		cWatch: map[string]cWatch{},
+		cHist:    map[string][]distSample{},
+		cWatch:   map[string]cWatch{},
+		cSustain: map[string]cSustain{},
 	}
 }
 

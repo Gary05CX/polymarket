@@ -8,7 +8,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// distSample is a signed distance of spot from window open (target).
+// distSample is abs distance of spot from window open (target).
 type distSample struct {
 	t   time.Time
 	abs decimal.Decimal
@@ -21,7 +21,15 @@ type cWatch struct {
 	direction int // +1 up leading, -1 down leading
 }
 
-// evalC implements the manual 70% momentum rules + retrace wait.
+// cSustain tracks continuous time |spot-open| has stayed above threshold
+// (only counted after MinElapsedSec into the window).
+type cSustain struct {
+	since time.Time
+	dir   int
+}
+
+// evalC: after market open ≥1m, if |spot-open| stays above thr for ≥2m, buy $5 on leader.
+// thr: BTC > $2, ETH > $0.2 (configurable). Optional mid band + retrace wait.
 func (e *Engine) evalC(in MarketInput) ([]Signal, []Skip) {
 	var skips []Skip
 	add := func(reason string) {
@@ -41,9 +49,6 @@ func (e *Engine) evalC(in MarketInput) ([]Signal, []Skip) {
 	if in.SecondsLeft < float64(e.C.MinSecondsLeft) {
 		return nil, nil
 	}
-	if in.ElapsedSec < float64(e.C.MinElapsedSec) {
-		return nil, nil // too early in window — common
-	}
 	if in.OpenPrice.IsZero() || in.Spot.IsZero() {
 		add("no_open_or_spot")
 		return nil, skips
@@ -59,12 +64,30 @@ func (e *Engine) evalC(in MarketInput) ([]Signal, []Skip) {
 	absMove := signed.Abs()
 	e.recordDist(in.Slug, now, absMove)
 
-	if absMove.LessThan(thr) {
-		e.clearWatch(in.Slug)
-		return nil, nil // not far enough
+	minEl := e.C.MinElapsedSec
+	if minEl <= 0 {
+		minEl = 60
+	}
+	sustSec := e.C.SustainedAboveSec
+	if sustSec <= 0 {
+		sustSec = 120
 	}
 
-	// Leading side from spot vs open.
+	// First minute of the market: do not start sustain clock.
+	if in.ElapsedSec < float64(minEl) {
+		e.clearSustain(in.Slug)
+		e.clearWatch(in.Slug)
+		return nil, nil
+	}
+
+	// Strictly greater than thr (user: 離 target > 2 / > 0.2).
+	if !absMove.GreaterThan(thr) {
+		e.clearSustain(in.Slug)
+		e.clearWatch(in.Slug)
+		return nil, nil
+	}
+
+	// Leading side from spot vs open ("跟大的那邊").
 	var outcome Side
 	var tokenID string
 	var mid, bestBid, bestAsk decimal.Decimal
@@ -78,18 +101,28 @@ func (e *Engine) evalC(in MarketInput) ([]Signal, []Skip) {
 		mid, bestBid, bestAsk = in.MidDown, in.BestBidDown, in.BestAskDown
 		dir = -1
 	} else {
+		e.clearSustain(in.Slug)
 		return nil, nil
 	}
 	if tokenID == "" || mid.IsZero() {
 		add("missing_token_or_mid")
 		return nil, skips
 	}
-	if mid.LessThan(e.C.MidMinDec) || mid.GreaterThan(e.C.MidMaxDec) {
-		// Common when market already at 90%+ or still cheap — don't spam.
-		return nil, nil
+
+	// Continuous hold above thr for SustainedAboveSec (starts only after min elapsed).
+	held, rem := e.touchSustain(in.Slug, dir, now, sustSec)
+	if !held {
+		add(fmt.Sprintf("sustain_waiting remaining=%.0fs need=%ds thr=%s abs=%s", rem, sustSec, thr.String(), absMove.StringFixed(4)))
+		return nil, skips
 	}
 
-	// Retrace / stability gate (user: 線往 target 靠近就等 30s–1m，不穩不下).
+	if !e.C.MidMinDec.IsZero() || !e.C.MidMaxDec.IsZero() {
+		if mid.LessThan(e.C.MidMinDec) || mid.GreaterThan(e.C.MidMaxDec) {
+			return nil, nil // mid out of band — common, no spam
+		}
+	}
+
+	// Retrace / stability gate (optional extra).
 	retracing := e.isRetracing(in.Slug, absMove, now)
 	if retracing {
 		w, ok := e.getWatch(in.Slug)
@@ -102,12 +135,10 @@ func (e *Engine) evalC(in MarketInput) ([]Signal, []Skip) {
 			add(fmt.Sprintf("retrace_waiting remaining=%.0fs", w.deadline.Sub(now).Seconds()))
 			return nil, skips
 		}
-		// Wait finished — still retracing ⇒ skip this setup.
 		if e.isRetracing(in.Slug, absMove, now) {
 			add("retrace_unstable_after_wait")
 			return nil, skips
 		}
-		// Stabilized after wait — allow through.
 		e.clearWatch(in.Slug)
 	} else {
 		e.clearWatch(in.Slug)
@@ -120,24 +151,23 @@ func (e *Engine) evalC(in MarketInput) ([]Signal, []Skip) {
 	}
 	sizeUSD := e.C.SizeUSDDec
 	size := sizeUSD.Div(price)
-	// Soft min shares for CLOB (live later); paper still records.
 	sig := Signal{
-		Strategy:    "C",
-		MarketSlug:  in.Slug,
-		Asset:       in.Asset,
-		Timeframe:   in.Timeframe,
-		TokenID:     tokenID,
-		Outcome:     outcome,
-		Price:       price,
-		SizeUSD:     sizeUSD,
-		Size:        size,
-		MarketMid:   mid,
-		BestBid:     bestBid,
-		BestAsk:     bestAsk,
-		SpotMove:    signed,
+		Strategy:   "C",
+		MarketSlug: in.Slug,
+		Asset:      in.Asset,
+		Timeframe:  in.Timeframe,
+		TokenID:    tokenID,
+		Outcome:    outcome,
+		Price:      price,
+		SizeUSD:    sizeUSD,
+		Size:       size,
+		MarketMid:  mid,
+		BestBid:    bestBid,
+		BestAsk:    bestAsk,
+		SpotMove:   signed,
 		Reason: fmt.Sprintf(
-			"C abs_move=%s thr=%s mid=%s elapsed=%.0f band=[%s,%s]",
-			absMove.StringFixed(4), thr.String(), mid.String(), in.ElapsedSec,
+			"C abs_move=%s thr=%s mid=%s elapsed=%.0f sustained=%ds band=[%s,%s]",
+			absMove.StringFixed(4), thr.String(), mid.String(), in.ElapsedSec, sustSec,
 			e.C.MidMinDec.String(), e.C.MidMaxDec.String(),
 		),
 		SecondsLeft: in.SecondsLeft,
@@ -156,6 +186,34 @@ func (e *Engine) moveThreshold(asset string) decimal.Decimal {
 	}
 }
 
+// touchSustain returns (ready, remainingSeconds). Resets if direction flips or thr broken (caller clears).
+func (e *Engine) touchSustain(slug string, dir int, now time.Time, needSec int) (bool, float64) {
+	e.cMu.Lock()
+	defer e.cMu.Unlock()
+	if e.cSustain == nil {
+		e.cSustain = map[string]cSustain{}
+	}
+	s, ok := e.cSustain[slug]
+	if !ok || s.dir != dir || s.since.IsZero() {
+		e.cSustain[slug] = cSustain{since: now, dir: dir}
+		return false, float64(needSec)
+	}
+	elapsed := now.Sub(s.since).Seconds()
+	need := float64(needSec)
+	if elapsed >= need {
+		return true, 0
+	}
+	return false, need - elapsed
+}
+
+func (e *Engine) clearSustain(slug string) {
+	e.cMu.Lock()
+	defer e.cMu.Unlock()
+	if e.cSustain != nil {
+		delete(e.cSustain, slug)
+	}
+}
+
 func (e *Engine) recordDist(slug string, now time.Time, abs decimal.Decimal) {
 	e.cMu.Lock()
 	defer e.cMu.Unlock()
@@ -164,8 +222,8 @@ func (e *Engine) recordDist(slug string, now time.Time, abs decimal.Decimal) {
 	}
 	s := e.cHist[slug]
 	s = append(s, distSample{t: now, abs: abs})
-	// Keep ~3 minutes of history.
-	cut := now.Add(-3 * time.Minute)
+	// Keep ~5 minutes (sustain window + buffer).
+	cut := now.Add(-5 * time.Minute)
 	i := 0
 	for i < len(s) && s[i].t.Before(cut) {
 		i++
@@ -189,7 +247,6 @@ func (e *Engine) isRetracing(slug string, absNow decimal.Decimal, now time.Time)
 		lookback = 30 * time.Second
 	}
 	targetT := now.Add(-lookback)
-	// Oldest sample at or after targetT; if none, use oldest.
 	var past *distSample
 	for i := range s {
 		if !s[i].t.After(targetT) {
@@ -199,12 +256,10 @@ func (e *Engine) isRetracing(slug string, absNow decimal.Decimal, now time.Time)
 	if past == nil {
 		past = &s[0]
 	}
-	// Need enough time separation.
 	if now.Sub(past.t) < lookback/2 {
 		return false
 	}
 	eps := e.C.RetraceEpsilonUSDDec
-	// Retracing if abs move fell by more than epsilon.
 	return absNow.LessThan(past.abs.Sub(eps))
 }
 

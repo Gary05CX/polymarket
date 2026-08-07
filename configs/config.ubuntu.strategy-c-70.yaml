@@ -1,18 +1,19 @@
-# Strategy C only — manual "70% momentum" dry-run profile.
+# Strategy C — momentum dry-run (updated thresholds)
 # See docs/MANUAL-STRATEGY-70PCT-MOMENTUM.md
 #
-# Rules (from live manual notes):
-#   - BTC |spot-open| >= $10, ETH >= $1
-#   - elapsed >= 2 minutes
-#   - buy ~$5 on leading side when mid in ~0.65–0.75 (not 90%+)
-#   - if price retraces toward open: wait ~45s; still unstable → skip
+# Rules:
+#   - After market open ≥ 1 minute: start watching
+#   - BTC |spot-open| > $2, ETH > $0.2, held continuously ≥ 2 minutes
+#   - Then buy $5 on the leading side (Up if spot>open, else Down)
+#   - Mid band 0.55–0.88 (wide enough to actually fire; not forced 0.70 only)
+#   - Retrace toward open: wait ~45s; still unstable → skip
 #   - 2 consecutive losses → cooldown ~45 minutes
+#
+# Earliest entry ≈ 1m + 2m = 3 minutes into the 5m window.
 #
 # .env:
 #   CONFIG_PATH=configs/config.ubuntu.strategy-c-70.yaml
 #   DRY_RUN=true
-#   DB_DRIVER=postgres
-#   DATABASE_URL=...
 
 assets:
   - btc
@@ -63,7 +64,6 @@ fair_value:
   p_max: "0.90"
   vol_window: 60
 
-# Disable A/B so paper stats are pure Strategy C
 strategy_a:
   enabled: false
   price_min: "0.55"
@@ -90,16 +90,17 @@ strategy_b:
 strategy_c:
   enabled: true
   size_usd: "5"
-  min_elapsed_sec: 120
-  btc_move_usd: "10"
-  eth_move_usd: "1"
-  mid_min: "0.65"
-  mid_max: "0.75"
+  min_elapsed_sec: 60              # market open 1 minute first
+  sustained_above_sec: 120         # then hold thr for 2 minutes
+  btc_move_usd: "2"                # |spot-open| > 2
+  eth_move_usd: "0.2"              # |spot-open| > 0.2
+  mid_min: "0.55"
+  mid_max: "0.88"
   min_seconds_left: 25
   limit_price_mode: "mid"
   stability_wait_sec: 45
   stability_lookback_sec: 30
-  retrace_epsilon_usd: "0.3"
+  retrace_epsilon_usd: "0.15"
   max_consecutive_losses: 2
   cooldown_sec: 2700
 

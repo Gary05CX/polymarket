@@ -13,18 +13,18 @@
 
 ---
 
-## 2. 進場條件（全部滿足才下）
+## 2. 進場條件（全部滿足才下）— **2026-08 更新**
 
 | # | 條件 | 說明 / 建議量化 |
 |---|------|-----------------|
-| 1 | **標的** | BTC 與 ETH 的 **5m Up/Down**（筆記原文寫 ETC，實務上為 **ETH**） |
-| 2 | **相對 target 的距離** | 以本窗 **open / 結算基準價（target）** 為準： |
-|   | | **BTC：\|spot − target\| ≥ 10**（美元，約 ±$10） |
-|   | | **ETH：\|spot − target\| ≥ 1**（美元，約 ±$1） |
-| 3 | **時間** | 本窗已過 **≥ 2 分鐘**（距 window start ≥ 120s；也等於剩餘時間 ≤ 約 3 分鐘，若窗長 5m） |
-| 4 | **方向與價位** | 壓在 **約 70% 那一側**（Polymarket mid ≈ **0.70**，容許帶可之後訂 e.g. 0.65–0.75） |
-|   | | 通常 = 已朝該方向移動後、市場給出的「領先方」 |
-| 5 | **下注金額** | **固定 $5 USD** notional |
+| 1 | **標的** | BTC 與 ETH 的 **5m Up/Down**（筆記寫 ETC = **ETH**） |
+| 2 | **相對 target 的距離** | **BTC：\|spot − open\| > $2**；**ETH：\|spot − open\| > $0.2** |
+| 3 | **時間結構** | ① 市場開了 **≥ 1 分鐘** 才開始計時 |
+|   | | ② 距離條件需 **連續維持 ≥ 2 分鐘** |
+|   | | → 理論上最早約在 **開窗後 3 分鐘** 才可能下單 |
+| 4 | **方向** | **跟大的那邊**（spot>open → Up；spot<open → Down） |
+| 5 | **mid 帶（script）** | 預設 **0.55–0.88**（放寬以便 dry-run 有單；可再收成 ~0.70） |
+| 6 | **下注金額** | **固定 $5 USD** notional |
 
 ### 方向怎麼定（建議寫死，方便 script）
 
@@ -126,21 +126,18 @@ ON_WIN: consecutive_losses = 0
 ## 8. 參數速查（預設草案）
 
 ```yaml
-# 非正式 config — 僅筆記，尚未接入 bot
-strategy_manual_70:
-  enabled: false
-  assets: [btc, eth]
-  timeframe: 5m
-  min_elapsed_sec: 120
-  btc_move_usd: 10
-  eth_move_usd: 1
-  target_mid: 0.70
-  mid_band: [0.65, 0.75]   # 建議帶，原文僅「70%」
-  size_usd: 5
-  max_orders_per_window: 1
+# configs/config.ubuntu.strategy-c-70.yaml（已接入 Strategy C）
+strategy_c:
+  enabled: true
+  size_usd: "5"
+  min_elapsed_sec: 60          # 開窗 1 分鐘後才開始計
+  sustained_above_sec: 120     # 距離條件連續 2 分鐘
+  btc_move_usd: "2"
+  eth_move_usd: "0.2"
+  mid_min: "0.55"
+  mid_max: "0.88"
   max_consecutive_losses: 2
-  cooldown_min_minutes: 30
-  cooldown_max_minutes: 60
+  cooldown_sec: 2700
 ```
 
 ---

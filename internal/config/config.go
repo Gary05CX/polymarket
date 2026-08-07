@@ -175,17 +175,21 @@ type StrategyBConfig struct {
 	MaxMarketPriceDec     decimal.Decimal `yaml:"-"`
 }
 
-// StrategyCConfig is the manual "70% momentum" profile (distance from open + ~0.70 mid).
+// StrategyCConfig is the manual momentum profile (distance from open + leading side).
 type StrategyCConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// SizeUSD fixed notional per order (e.g. "5").
 	SizeUSD string `yaml:"size_usd"`
-	// MinElapsedSec: window must be this old (e.g. 120 = 2 minutes into 5m).
+	// MinElapsedSec: only start counting the move after market open this long
+	// (e.g. 60 = first minute of the 5m window is ignored for sustain).
 	MinElapsedSec int `yaml:"min_elapsed_sec"`
-	// Move thresholds in USD vs window open/target.
-	BTCMoveUSD string `yaml:"btc_move_usd"`
-	ETHMoveUSD string `yaml:"eth_move_usd"`
-	// Mid band for the leading side (~70%; exclude 90%+ by default).
+	// SustainedAboveSec: |spot-open| must stay above thr continuously this long
+	// after MinElapsedSec (e.g. 120 = 2 minutes). Earliest entry ≈ min+sustained.
+	SustainedAboveSec int `yaml:"sustained_above_sec"`
+	// Move thresholds in USD vs window open/target (strictly greater than).
+	BTCMoveUSD string `yaml:"btc_move_usd"` // e.g. "2"
+	ETHMoveUSD string `yaml:"eth_move_usd"` // e.g. "0.2"
+	// Mid band for the leading side (optional filter; widen to trade more often).
 	MidMin string `yaml:"mid_min"`
 	MidMax string `yaml:"mid_max"`
 	MinSecondsLeft int    `yaml:"min_seconds_left"`
@@ -199,11 +203,11 @@ type StrategyCConfig struct {
 	MaxConsecutiveLosses int `yaml:"max_consecutive_losses"`
 	CooldownSec              int `yaml:"cooldown_sec"` // e.g. 2700 = 45m
 
-	SizeUSDDec          decimal.Decimal `yaml:"-"`
-	BTCMoveUSDDec       decimal.Decimal `yaml:"-"`
-	ETHMoveUSDDec       decimal.Decimal `yaml:"-"`
-	MidMinDec           decimal.Decimal `yaml:"-"`
-	MidMaxDec           decimal.Decimal `yaml:"-"`
+	SizeUSDDec           decimal.Decimal `yaml:"-"`
+	BTCMoveUSDDec        decimal.Decimal `yaml:"-"`
+	ETHMoveUSDDec        decimal.Decimal `yaml:"-"`
+	MidMinDec            decimal.Decimal `yaml:"-"`
+	MidMaxDec            decimal.Decimal `yaml:"-"`
 	RetraceEpsilonUSDDec decimal.Decimal `yaml:"-"`
 }
 
@@ -309,7 +313,10 @@ func (c *Config) parseDecimals() error {
 	// Strategy C optional — only required when enabled.
 	if c.StrategyC.Enabled {
 		if c.StrategyC.MinElapsedSec <= 0 {
-			c.StrategyC.MinElapsedSec = 120
+			c.StrategyC.MinElapsedSec = 60 // first minute: do not start sustain clock
+		}
+		if c.StrategyC.SustainedAboveSec <= 0 {
+			c.StrategyC.SustainedAboveSec = 120 // hold thr for 2 minutes
 		}
 		if c.StrategyC.StabilityWaitSec <= 0 {
 			c.StrategyC.StabilityWaitSec = 45
