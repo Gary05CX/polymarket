@@ -80,6 +80,7 @@ func openDuckDB(path string) (*Store, error) {
 		`ALTER TABLE markets ADD COLUMN IF NOT EXISTS close_price VARCHAR`,
 		`ALTER TABLE orders ADD COLUMN IF NOT EXISTS dry_run BOOLEAN DEFAULT TRUE`,
 		`ALTER TABLE orders ADD COLUMN IF NOT EXISTS error_message VARCHAR`,
+		`ALTER TABLE orders ADD COLUMN IF NOT EXISTS settle_pnl_usd VARCHAR`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			_, _ = db.Exec(strings.Replace(q, " IF NOT EXISTS", "", 1))
@@ -126,6 +127,7 @@ func openPostgres(dsn string) (*Store, error) {
 		`ALTER TABLE markets ADD COLUMN IF NOT EXISTS settle_pnl_usd NUMERIC(36, 18)`,
 		`ALTER TABLE orders ADD COLUMN IF NOT EXISTS dry_run BOOLEAN NOT NULL DEFAULT TRUE`,
 		`ALTER TABLE orders ADD COLUMN IF NOT EXISTS error_message TEXT`,
+		`ALTER TABLE orders ADD COLUMN IF NOT EXISTS settle_pnl_usd NUMERIC(36, 18)`,
 	} {
 		_, _ = db.Exec(q)
 	}

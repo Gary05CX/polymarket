@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS orders (
     dry_run         BOOLEAN NOT NULL DEFAULT TRUE,
     -- error_message: CLOB/API error text when status = error (null otherwise)
     error_message   TEXT,
+    -- settle_pnl_usd: per-order PnL at window settle (multi-strategy compare)
+    settle_pnl_usd  NUMERIC(36, 18),
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );

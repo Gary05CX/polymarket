@@ -50,39 +50,35 @@ func (e *Engine) Evaluate(in MarketInput) (signals []Signal, skips []Skip) {
 		signals = append(signals, sigs...)
 		skips = append(skips, sk...)
 	}
+	// A/B/C may all fire on the same market when one_order_per_market=false
+	// (compare mode). Only collapse duplicate strategy+token in the same tick.
+	seen := map[string]bool{} // strategy|token
+	for _, s := range signals {
+		seen[s.Strategy+"|"+s.TokenID] = true
+	}
 	if e.B.Enabled {
-		have := map[string]bool{}
-		for _, s := range signals {
-			have[s.TokenID] = true
-		}
 		sigs, sk := e.evalB(in)
 		for _, s := range sigs {
-			if !have[s.TokenID] {
-				signals = append(signals, s)
-			} else {
-				skips = append(skips, Skip{
-					Strategy: "B", MarketSlug: in.Slug,
-					Reason: "token_already_signaled_by_A",
-				})
+			key := s.Strategy + "|" + s.TokenID
+			if seen[key] {
+				skips = append(skips, Skip{Strategy: "B", MarketSlug: in.Slug, Reason: "duplicate_in_tick"})
+				continue
 			}
+			seen[key] = true
+			signals = append(signals, s)
 		}
 		skips = append(skips, sk...)
 	}
 	if e.C.Enabled {
-		have := map[string]bool{}
-		for _, s := range signals {
-			have[s.TokenID] = true
-		}
 		sigs, sk := e.evalC(in)
 		for _, s := range sigs {
-			if !have[s.TokenID] {
-				signals = append(signals, s)
-			} else {
-				skips = append(skips, Skip{
-					Strategy: "C", MarketSlug: in.Slug,
-					Reason: "token_already_signaled",
-				})
+			key := s.Strategy + "|" + s.TokenID
+			if seen[key] {
+				skips = append(skips, Skip{Strategy: "C", MarketSlug: in.Slug, Reason: "duplicate_in_tick"})
+				continue
 			}
+			seen[key] = true
+			signals = append(signals, s)
 		}
 		skips = append(skips, sk...)
 	}

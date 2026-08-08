@@ -72,7 +72,6 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 		}
 	}
 
-	// Prefer locked close_price, then last snapshot, then live feed.
 	closePx, ok, err := e.st.GetClosePrice(ctx, m.Slug)
 	if err != nil {
 		return r, err
@@ -102,34 +101,6 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 	}
 	r.Outcome = outcome
 
-	positions, err := e.st.ListPositions(ctx, m.Slug)
-	if err != nil {
-		return r, err
-	}
-	r.Positions = len(positions)
-
-	if len(positions) == 0 {
-		orders, err := e.st.ListOrdersForMarket(ctx, m.Slug)
-		if err != nil {
-			return r, err
-		}
-		for _, o := range orders {
-			if o.Status != "dry_run" && o.Status != "dry_filled" && o.Status != "live" && o.Status != "pending" && o.Status != "open" {
-				continue
-			}
-			positions = append(positions, store.Position{
-				MarketSlug: o.MarketSlug,
-				TokenID:    o.TokenID,
-				Size:       o.Size,
-				AvgPrice:   o.Price,
-				SizeUSD:    o.SizeUSD,
-			})
-		}
-		r.Positions = len(positions)
-	}
-
-	totalPnL := decimal.Zero
-	totalFee := decimal.Zero
 	winToken := ""
 	switch outcome {
 	case "Up":
@@ -140,10 +111,55 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 
 	feeRate := decimal.NewFromInt(int64(e.feeBps)).Div(decimal.NewFromInt(10000))
 
-	for _, p := range positions {
-		size, _ := decimal.NewFromString(p.Size)
-		avg, _ := decimal.NewFromString(p.AvgPrice)
-		costUSD, _ := decimal.NewFromString(p.SizeUSD)
+	// Prefer per-order settlement so A/B/C can co-exist without merging PnL.
+	orders, err := e.st.ListOrdersForMarket(ctx, m.Slug)
+	if err != nil {
+		return r, err
+	}
+	type leg struct {
+		id, strategy, tokenID, size, price, sizeUSD, status string
+		dryRun                                              bool
+	}
+	var legs []leg
+	for _, o := range orders {
+		switch o.Status {
+		case "dry_run", "dry_filled", "live", "pending", "open":
+			legs = append(legs, leg{
+				id: o.ID, strategy: o.Strategy, tokenID: o.TokenID,
+				size: o.Size, price: o.Price, sizeUSD: o.SizeUSD,
+				status: o.Status, dryRun: o.DryRun,
+			})
+		}
+	}
+
+	// Fallback: positions only if no open orders (legacy path).
+	if len(legs) == 0 {
+		positions, err := e.st.ListPositions(ctx, m.Slug)
+		if err != nil {
+			return r, err
+		}
+		for _, p := range positions {
+			legs = append(legs, leg{
+				id: "", strategy: "?", tokenID: p.TokenID,
+				size: p.Size, price: p.AvgPrice, sizeUSD: p.SizeUSD,
+				status: "position", dryRun: true,
+			})
+		}
+	}
+	r.Positions = len(legs)
+
+	totalPnL := decimal.Zero
+	totalFee := decimal.Zero
+	anyLive := false
+	byStrat := map[string]decimal.Decimal{}
+
+	for _, lg := range legs {
+		if !lg.dryRun && lg.status != "position" {
+			anyLive = true
+		}
+		size, _ := decimal.NewFromString(lg.size)
+		avg, _ := decimal.NewFromString(lg.price)
+		costUSD, _ := decimal.NewFromString(lg.sizeUSD)
 		if costUSD.IsZero() && !size.IsZero() && !avg.IsZero() {
 			costUSD = size.Mul(avg)
 		}
@@ -152,24 +168,40 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 
 		var pnl decimal.Decimal
 		if outcome == "Unknown" || winToken == "" {
-			// cannot resolve reliably — record 0 PnL, no fee
 			totalFee = totalFee.Sub(fee)
 			pnl = decimal.Zero
-		} else if p.TokenID == winToken {
-			// win: size * $1 - cost - fee
+		} else if lg.tokenID == winToken {
 			pnl = size.Sub(costUSD).Sub(fee)
 		} else {
 			pnl = costUSD.Neg().Sub(fee)
 		}
 		totalPnL = totalPnL.Add(pnl)
+		stKey := lg.strategy
+		if stKey == "" {
+			stKey = "?"
+		}
+		byStrat[stKey] = byStrat[stKey].Add(pnl)
+
+		if lg.id != "" {
+			term := "dry_settled"
+			if !lg.dryRun {
+				term = "settled"
+			}
+			if err := e.st.UpdateOrderSettle(ctx, lg.id, term, pnl); err != nil {
+				e.log.Warn("order settle update", "id", lg.id, "err", err)
+			}
+		}
 	}
+
 	r.PnLUSD = totalPnL
 	r.FeeUSD = totalFee
 
-	// Distinguish paper vs live in pnl_ledger (orders.dry_run is source of truth).
 	live, err := e.st.MarketHasLiveOrders(ctx, m.Slug)
 	if err != nil {
 		return r, err
+	}
+	if anyLive {
+		live = true
 	}
 	kind := "paper_settle"
 	if live {
@@ -177,24 +209,37 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 	}
 	r.Kind = kind
 	r.Live = live
-	detail := fmt.Sprintf(
-		`{"slug":%q,"outcome":%q,"open":%q,"close":%q,"positions":%d,"fee_usd":%q,"fee_bps":%d,"live":%v}`,
-		m.Slug, outcome, open.String(), closePx.String(), r.Positions, totalFee.String(), e.feeBps, live,
-	)
-	if err := e.st.RecordPnL(ctx, kind, totalPnL, detail); err != nil {
-		return r, err
+
+	// One ledger line per strategy (no duplicate market total — avoids double-count in circuit breakers).
+	// Compare queries should prefer orders.settle_pnl_usd; ledger kinds like paper_settle_A.
+	if len(byStrat) == 0 {
+		detail := fmt.Sprintf(
+			`{"slug":%q,"outcome":%q,"open":%q,"close":%q,"positions":0,"fee_usd":%q,"live":%v}`,
+			m.Slug, outcome, open.String(), closePx.String(), totalFee.String(), live,
+		)
+		if err := e.st.RecordPnL(ctx, kind, totalPnL, detail); err != nil {
+			return r, err
+		}
+	} else {
+		for st, pnl := range byStrat {
+			skind := kind
+			if st != "?" && st != "" {
+				skind = kind + "_" + st // e.g. paper_settle_A
+			}
+			detail := fmt.Sprintf(
+				`{"slug":%q,"strategy":%q,"outcome":%q,"open":%q,"close":%q,"pnl_usd":%q,"fee_bps":%d,"live":%v}`,
+				m.Slug, st, outcome, open.String(), closePx.String(), pnl.String(), e.feeBps, live,
+			)
+			if err := e.st.RecordPnL(ctx, skind, pnl, detail); err != nil {
+				return r, err
+			}
+		}
 	}
-	// Paper orders keep dry_settled; live path uses settled (do not collapse live into dry_*).
-	if err := e.st.MarkOrdersStatus(ctx, m.Slug, "dry_settled", []string{
-		"dry_run", "dry_filled",
-	}); err != nil {
-		return r, err
-	}
-	if err := e.st.MarkOrdersStatus(ctx, m.Slug, "settled", []string{
-		"pending", "live", "open", "cancelled",
-	}); err != nil {
-		return r, err
-	}
+
+	// Status already set per-order; still clear any leftover statuses.
+	_ = e.st.MarkOrdersStatus(ctx, m.Slug, "dry_settled", []string{"dry_run", "dry_filled"})
+	_ = e.st.MarkOrdersStatus(ctx, m.Slug, "settled", []string{"pending", "live", "open", "cancelled"})
+
 	if err := e.st.ClearPositions(ctx, m.Slug); err != nil {
 		return r, err
 	}

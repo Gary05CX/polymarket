@@ -55,6 +55,8 @@ type Order struct {
 	DryRun bool
 	// ErrorMessage is set when Status is "error" (API / validation text).
 	ErrorMessage string
+	// SettlePnLUSD is per-order paper/live settle PnL (set at settlement; empty if open).
+	SettlePnLUSD string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -208,18 +210,18 @@ FROM markets WHERE slug = ?
 // orderSelectCols is the standard column list for scanning Order rows.
 const orderSelectCols = `
 id, market_slug, token_id, strategy, side, price, size, size_usd,
-status, clob_order_id, reason, dry_run, error_message, created_at, updated_at`
+status, clob_order_id, reason, dry_run, error_message, settle_pnl_usd, created_at, updated_at`
 
 func scanOrder(rows interface {
 	Scan(dest ...any) error
 }) (Order, error) {
 	var o Order
-	var clob, reason, errMsg sql.NullString
+	var clob, reason, errMsg, settlePnL sql.NullString
 	var created, updated sql.NullTime
 	var dryRun bool
 	if err := rows.Scan(
 		&o.ID, &o.MarketSlug, &o.TokenID, &o.Strategy, &o.Side, &o.Price, &o.Size, &o.SizeUSD,
-		&o.Status, &clob, &reason, &dryRun, &errMsg, &created, &updated,
+		&o.Status, &clob, &reason, &dryRun, &errMsg, &settlePnL, &created, &updated,
 	); err != nil {
 		return o, err
 	}
@@ -232,6 +234,9 @@ func scanOrder(rows interface {
 	}
 	if errMsg.Valid {
 		o.ErrorMessage = errMsg.String
+	}
+	if settlePnL.Valid {
+		o.SettlePnLUSD = settlePnL.String
 	}
 	if created.Valid {
 		o.CreatedAt = created.Time
@@ -276,6 +281,15 @@ func (s *Store) UpdateOrderError(ctx context.Context, id, errMsg string) error {
 UPDATE orders SET status = ?, error_message = ?, updated_at = ?
 WHERE id = ?
 `, "error", nullStr(errMsg), time.Now().UTC(), id)
+	return err
+}
+
+// UpdateOrderSettle records terminal status and per-order PnL for multi-strategy compare.
+func (s *Store) UpdateOrderSettle(ctx context.Context, id, status string, pnlUSD decimal.Decimal) error {
+	_, err := s.exec(ctx, `
+UPDATE orders SET status = ?, settle_pnl_usd = ?, updated_at = ?
+WHERE id = ?
+`, status, pnlUSD.String(), time.Now().UTC(), id)
 	return err
 }
 

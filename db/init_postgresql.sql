@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS orders (
     reason          TEXT,
     dry_run         BOOLEAN NOT NULL DEFAULT TRUE,
     error_message   TEXT,
+    settle_pnl_usd  NUMERIC(36, 18),
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
