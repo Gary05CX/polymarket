@@ -70,7 +70,7 @@ fair_value:
 strategy_a:
   enabled: true
   price_min: "0.55"
-  price_max: "0.64"          # was 0.70 in paper-bold — that bucket lost ~$27
+  price_max: "0.62"          # 0.62–0.64 paper −EV (WR ~59%); was 0.64 then 0.70
   min_edge: "0.03"
   max_edge: "0.20"
   edge_slope: "0.25"
@@ -85,8 +85,8 @@ strategy_b:
   enabled: true
   price_move_threshold: "0.0009"  # 0.09%
   max_size_usd: "3"               # was 5
-  min_edge: "0.035"
-  max_market_price: "0.62"        # was 0.75
+  min_edge: "0.08"                # was 0.035 — cheap B already has huge edge
+  max_market_price: "0.55"        # was 0.62; 0.55–0.62 paper net ≤0
   min_seconds_left: 35
   limit_price_mode: "mid"
   reject_fair_at_clamp: true

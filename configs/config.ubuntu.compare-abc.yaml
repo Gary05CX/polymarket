@@ -67,11 +67,12 @@ fair_value:
   p_max: "0.90"
   vol_window: 60
 
-# A: half-tight cheap edge (~$2–3 size band)
+# A: cheap edge. Paper (N=372): 0.62–0.64 was −EV (WR 59% / −$5);
+# 0.58–0.60 best (WR 87%). Cut price_max 0.64→0.62.
 strategy_a:
   enabled: true
   price_min: "0.55"
-  price_max: "0.64"
+  price_max: "0.62"
   min_edge: "0.03"
   max_edge: "0.20"
   edge_slope: "0.25"
@@ -81,13 +82,14 @@ strategy_a:
   min_seconds_left: 50
   limit_price_mode: "mid"
 
-# B: lag harvest (rarely fires under tight max mid)
+# B: lag harvest. N=19 small but mid≥0.55 net ≤0; cheap <0.55 +EV.
+# max_market_price 0.62→0.55 (fewer trades, better payoff).
 strategy_b:
   enabled: true
   price_move_threshold: "0.0009"
   max_size_usd: "3"
-  min_edge: "0.035"
-  max_market_price: "0.62"
+  min_edge: "0.08"
+  max_market_price: "0.55"
   min_seconds_left: 35
   limit_price_mode: "mid"
   reject_fair_at_clamp: true
