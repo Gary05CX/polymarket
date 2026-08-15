@@ -56,9 +56,12 @@ func run() error {
 		"timeframes": cfg.Timeframes,
 		"dry_run":    cfg.CLOB.DryRun,
 		"db_driver":  st.DriverName(),
-		"strategy_a": cfg.StrategyA.Enabled,
-		"strategy_b": cfg.StrategyB.Enabled,
-		"strategy_c": cfg.StrategyC.Enabled,
+		"strategy_a":       cfg.StrategyA.Enabled,
+		"strategy_b":       cfg.StrategyB.Enabled,
+		"strategy_c":       cfg.StrategyC.Enabled,
+		"a_paper_only":     cfg.StrategyA.PaperOnly,
+		"b_paper_only":     cfg.StrategyB.PaperOnly,
+		"c_paper_only":     cfg.StrategyC.PaperOnly,
 	})
 
 	filtered := map[string]string{}
@@ -88,7 +91,7 @@ func run() error {
 	}
 	exec := execution.New(cfg, clob, st, log)
 	strat := strategy.New(cfg.StrategyA, cfg.StrategyB, cfg.StrategyC, cfg.FairValue)
-	rm := risk.New(cfg.Risk, st, cfg.CLOB.DryRun)
+	rm := risk.New(cfg.Risk, st, cfg.CLOB.DryRun, cfg.EffectiveDryRun)
 	settler := settle.New(st, log, cfg.Risk.PaperFeeBps)
 
 	ticker := time.NewTicker(cfg.Loop.PollInterval())
@@ -479,7 +482,7 @@ func tick(
 				"price":    sig.Price.String(),
 				"size_usd": sig.SizeUSD.String(),
 				"edge":     sig.Edge.String(),
-				"dry_run":  cfg.CLOB.DryRun,
+				"dry_run":  cfg.EffectiveDryRun(sig.Strategy),
 			})
 		}
 	}

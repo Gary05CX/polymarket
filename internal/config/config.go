@@ -148,6 +148,8 @@ type StrategyAConfig struct {
 	SizeMaxUSD        string `yaml:"size_max_usd"`
 	MinSecondsLeft    int    `yaml:"min_seconds_left"`
 	LimitPriceMode    string `yaml:"limit_price_mode"`
+	// PaperOnly: never send to CLOB even when DRY_RUN=false (data collection).
+	PaperOnly bool `yaml:"paper_only"`
 
 	PriceMinDec   decimal.Decimal `yaml:"-"`
 	PriceMaxDec   decimal.Decimal `yaml:"-"`
@@ -168,6 +170,8 @@ type StrategyBConfig struct {
 	LimitPriceMode     string `yaml:"limit_price_mode"`
 	// RejectFairAtClamp: same as A — skip if fair pinned at bounds.
 	RejectFairAtClamp bool `yaml:"reject_fair_at_clamp"`
+	// PaperOnly: never send to CLOB even when DRY_RUN=false (data collection).
+	PaperOnly bool `yaml:"paper_only"`
 
 	PriceMoveThresholdDec decimal.Decimal `yaml:"-"`
 	MaxSizeUSDDec         decimal.Decimal `yaml:"-"`
@@ -202,6 +206,8 @@ type StrategyCConfig struct {
 	// After this many consecutive settled losses, pause new C signals.
 	MaxConsecutiveLosses int `yaml:"max_consecutive_losses"`
 	CooldownSec              int `yaml:"cooldown_sec"` // e.g. 2700 = 45m
+	// PaperOnly: never send to CLOB even when DRY_RUN=false (data collection).
+	PaperOnly bool `yaml:"paper_only"`
 
 	SizeUSDDec           decimal.Decimal `yaml:"-"`
 	BTCMoveUSDDec        decimal.Decimal `yaml:"-"`
@@ -401,6 +407,25 @@ func (c *Config) applyEnv() {
 	// legacy alias
 	if v := strings.TrimSpace(os.Getenv("POSTGRES_URL")); v != "" && c.Database.PostgresURL == "" {
 		c.Database.PostgresURL = v
+	}
+}
+
+// EffectiveDryRun is true when this strategy must not hit the CLOB.
+// Global DRY_RUN=true papers everything; paper_only papers one strategy
+// even if DRY_RUN=false (used so B/C keep collecting while A trades live).
+func (c *Config) EffectiveDryRun(strategy string) bool {
+	if c == nil || c.CLOB.DryRun {
+		return true
+	}
+	switch strings.ToUpper(strings.TrimSpace(strategy)) {
+	case "A":
+		return c.StrategyA.PaperOnly
+	case "B":
+		return c.StrategyB.PaperOnly
+	case "C":
+		return c.StrategyC.PaperOnly
+	default:
+		return true
 	}
 }
 

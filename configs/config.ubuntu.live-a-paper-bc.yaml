@@ -1,23 +1,16 @@
-# COMPARE: A+B+C together. B/C are paper_only (data only).
-# Set DRY_RUN=false to live-trade A only; B/C stay paper.
-#
-# - one_order_per_market: false  → each strategy can take its own order
-# - one_order_per_strategy: true → still max 1 order per strategy per window
-# - Per-order settle_pnl_usd written at settle (do NOT sum markets.settle_pnl by strategy)
+# Live A + paper B/C (same filters as compare-abc).
 #
 # .env:
-#   CONFIG_PATH=configs/config.ubuntu.compare-abc.yaml
-#   DRY_RUN=true
-#   DB_DRIVER=postgres
+#   CONFIG_PATH=configs/config.ubuntu.live-a-paper-bc.yaml
+#   DRY_RUN=false          # A hits CLOB; B/C still paper
+#   PRIVATE_KEY=...
+#   FUNDER=...             # if proxy
+#   SIGNATURE_TYPE=0|1
 #
-# Query compare:
-#   SELECT strategy, COUNT(*),
-#     COUNT(*) FILTER (WHERE settle_pnl_usd::numeric > 0) w,
-#     COUNT(*) FILTER (WHERE settle_pnl_usd::numeric < 0) l,
-#     ROUND(SUM(settle_pnl_usd::numeric),2) pnl
-#   FROM orders
-#   WHERE settle_pnl_usd IS NOT NULL AND created_at > now() - interval '1 day'
-#   GROUP BY strategy;
+# A size ~$2–3: at mid 0.55–0.62 need ≥5 shares ⇒ often ~$2.8+; if CLOB
+# rejects min size, raise size_min/max slightly.
+#
+# Circuit breaker uses live_* PnL only (paper C losses will not halt A).
 
 assets:
   - btc
@@ -41,7 +34,7 @@ gamma:
 clob:
   host: "https://clob.polymarket.com"
   chain_id: 137
-  dry_run: true
+  dry_run: true                 # env DRY_RUN=false overrides for A
 
 database:
   driver: postgres
@@ -68,8 +61,6 @@ fair_value:
   p_max: "0.90"
   vol_window: 60
 
-# A: cheap edge. Paper (N=372): 0.62–0.64 was −EV (WR 59% / −$5);
-# 0.58–0.60 best (WR 87%). Cut price_max 0.64→0.62.
 strategy_a:
   enabled: true
   price_min: "0.55"
@@ -78,14 +69,12 @@ strategy_a:
   max_edge: "0.20"
   edge_slope: "0.25"
   reject_fair_at_clamp: true
-  size_min_usd: "2"
-  size_max_usd: "3"
+  size_min_usd: "3"
+  size_max_usd: "4"
   min_seconds_left: 50
   limit_price_mode: "mid"
-  paper_only: false              # live when DRY_RUN=false
+  paper_only: false
 
-# B: lag harvest. N=19 small but mid≥0.55 net ≤0; cheap <0.55 +EV.
-# max_market_price 0.62→0.55 (fewer trades, better payoff).
 strategy_b:
   enabled: true
   price_move_threshold: "0.0009"
@@ -95,9 +84,8 @@ strategy_b:
   min_seconds_left: 35
   limit_price_mode: "mid"
   reject_fair_at_clamp: true
-  paper_only: true               # never CLOB — keep collecting paper stats
+  paper_only: true
 
-# C: manual momentum (BTC>$2 / ETH>$0.2 after 1m, hold 2m, $5)
 strategy_c:
   enabled: true
   size_usd: "5"
@@ -114,17 +102,16 @@ strategy_c:
   retrace_epsilon_usd: "0.15"
   max_consecutive_losses: 2
   cooldown_sec: 2700
-  paper_only: true               # never CLOB — keep collecting paper stats
+  paper_only: true
 
 risk:
-  # Higher caps: A+B+C may each hold exposure on same window (paper compare)
   max_position_usd_per_market: "20"
   max_open_markets: 8
-  max_daily_loss_usd: "80"
-  max_hourly_loss_usd: "40"
+  max_daily_loss_usd: "12"
+  max_hourly_loss_usd: "6"
   hard_min_seconds_left: 18
   one_order_per_strategy: true
-  one_order_per_market: false   # KEY for parallel compare
+  one_order_per_market: false
   max_spread: "0.08"
   paper_fill_at_mid: true
   paper_fee_bps: 120

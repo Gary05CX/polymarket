@@ -703,9 +703,17 @@ func (s *Store) nextID(ctx context.Context, seq string) (int64, error) {
 
 // SumPnLSince sums amount_usd since t.
 func (s *Store) SumPnLSince(ctx context.Context, since time.Time) (decimal.Decimal, error) {
-	row := s.queryRow(ctx, `
-SELECT COALESCE(SUM(`+s.castFloat("amount_usd")+`), 0) FROM pnl_ledger WHERE ts >= ?
-`, since.UTC())
+	return s.SumPnLSinceLiveOnly(ctx, since, false)
+}
+
+// SumPnLSinceLiveOnly when liveOnly is true only includes kind like live_settle*.
+// Used so paper-only B/C PnL cannot trip the live-A circuit breaker.
+func (s *Store) SumPnLSinceLiveOnly(ctx context.Context, since time.Time, liveOnly bool) (decimal.Decimal, error) {
+	q := `SELECT COALESCE(SUM(` + s.castFloat("amount_usd") + `), 0) FROM pnl_ledger WHERE ts >= ?`
+	if liveOnly {
+		q += ` AND kind LIKE 'live%'`
+	}
+	row := s.queryRow(ctx, q, since.UTC())
 	var v float64
 	if err := row.Scan(&v); err != nil {
 		return decimal.Zero, err

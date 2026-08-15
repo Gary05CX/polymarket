@@ -57,7 +57,8 @@ func (e *Executor) PlaceSignal(ctx context.Context, sig strategy.Signal) (*store
 	clobID := ""
 	var placeErr error
 
-	if e.cfg.CLOB.DryRun {
+	paper := e.cfg.EffectiveDryRun(sig.Strategy)
+	if paper {
 		status = "dry_run"
 		clobID = "dry-" + id[:8]
 		e.log.Info("dry_run order",
@@ -67,6 +68,7 @@ func (e *Executor) PlaceSignal(ctx context.Context, sig strategy.Signal) (*store
 			"price", sig.Price.String(),
 			"size_usd", sig.SizeUSD.String(),
 			"reason", sig.Reason,
+			"paper_only", !e.cfg.CLOB.DryRun,
 		)
 	} else {
 		oid, err := e.clob.PlaceLimitBuy(ctx, sig.TokenID, sig.Price, sig.Size, postOnly)
@@ -103,7 +105,7 @@ func (e *Executor) PlaceSignal(ctx context.Context, sig strategy.Signal) (*store
 		Status:       status,
 		CLOBOrderID:  clobID,
 		Reason:       sig.Reason,
-		DryRun:       e.cfg.CLOB.DryRun,
+		DryRun:       paper,
 		ErrorMessage: errMsg,
 	}
 	if err := e.st.InsertOrder(ctx, o); err != nil {

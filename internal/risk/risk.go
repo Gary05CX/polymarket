@@ -15,9 +15,10 @@ import (
 
 // Manager checks signals against risk limits.
 type Manager struct {
-	cfg    config.RiskConfig
-	store  *store.Store
-	dryRun bool
+	cfg          config.RiskConfig
+	store        *store.Store
+	dryRun       bool
+	effectiveDry func(strategy string) bool
 
 	mu         sync.Mutex
 	halted     bool
@@ -29,14 +30,22 @@ type Manager struct {
 	rejects  map[string]int
 }
 
-// New creates a risk manager.
-func New(cfg config.RiskConfig, st *store.Store, dryRun bool) *Manager {
+// New creates a risk manager. effectiveDry may be nil (then dryRun applies to all).
+func New(cfg config.RiskConfig, st *store.Store, dryRun bool, effectiveDry func(string) bool) *Manager {
 	return &Manager{
-		cfg:     cfg,
-		store:   st,
-		dryRun:  dryRun,
-		rejects: make(map[string]int),
+		cfg:          cfg,
+		store:        st,
+		dryRun:       dryRun,
+		effectiveDry: effectiveDry,
+		rejects:      make(map[string]int),
 	}
+}
+
+func (m *Manager) isPaper(strategy string) bool {
+	if m.effectiveDry != nil {
+		return m.effectiveDry(strategy)
+	}
+	return m.dryRun
 }
 
 // Halted reports if new orders are blocked.
@@ -171,8 +180,8 @@ func (m *Manager) Filter(ctx context.Context, signals []strategy.Signal) (allowe
 			}
 		}
 
-		// Paper fill at mid ONLY in dry-run
-		if m.dryRun && m.cfg.PaperFillAtMid && !s.MarketMid.IsZero() {
+		// Paper fill at mid for global dry-run or paper_only strategies (B/C).
+		if m.isPaper(s.Strategy) && m.cfg.PaperFillAtMid && !s.MarketMid.IsZero() {
 			s.Price = s.MarketMid
 			if !s.Price.IsZero() {
 				s.Size = s.SizeUSD.Div(s.Price)
@@ -220,11 +229,13 @@ func (m *Manager) checkLossLimits(ctx context.Context) error {
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	hourStart := now.Truncate(time.Hour)
 
-	daily, err := m.store.SumPnLSince(ctx, dayStart)
+	// Live A must not be halted by paper B/C settle losses.
+	liveOnly := !m.dryRun
+	daily, err := m.store.SumPnLSinceLiveOnly(ctx, dayStart, liveOnly)
 	if err != nil {
 		return fmt.Errorf("daily pnl: %w", err)
 	}
-	hourly, err := m.store.SumPnLSince(ctx, hourStart)
+	hourly, err := m.store.SumPnLSinceLiveOnly(ctx, hourStart, liveOnly)
 	if err != nil {
 		return fmt.Errorf("hourly pnl: %w", err)
 	}
