@@ -153,6 +153,109 @@ func (c *Client) DiscoverOne(ctx context.Context, asset, timeframe string, now t
 	return nil, fmt.Errorf("no market for %s %s window %d", asset, tf, ws)
 }
 
+// OfficialResolution is Gamma's resolved Up/Down (Chainlink TWAP), not Binance spot.
+type OfficialResolution struct {
+	Outcome     string // "Up" | "Down"
+	Ready       bool
+	PriceToBeat decimal.Decimal
+	FinalPrice  decimal.Decimal
+}
+
+// FetchOfficialResolution loads Gamma event by slug and returns the official winner
+// when the market is resolved (outcomePrices ~1/0 or eventMetadata TWAP).
+func (c *Client) FetchOfficialResolution(ctx context.Context, slug string) (OfficialResolution, error) {
+	var out OfficialResolution
+	if strings.TrimSpace(slug) == "" {
+		return out, fmt.Errorf("empty slug")
+	}
+	u := fmt.Sprintf("%s/events?slug=%s", c.baseURL, url.QueryEscape(slug))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return out, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return out, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return out, fmt.Errorf("gamma status %d for slug %s", resp.StatusCode, slug)
+	}
+	var events []gammaEvent
+	if err := json.Unmarshal(body, &events); err != nil {
+		var one gammaEvent
+		if err2 := json.Unmarshal(body, &one); err2 != nil {
+			return out, fmt.Errorf("decode events: %w", err)
+		}
+		events = []gammaEvent{one}
+	}
+	if len(events) == 0 || len(events[0].Markets) == 0 {
+		return out, nil
+	}
+	return parseOfficial(events[0]), nil
+}
+
+func parseOfficial(ev gammaEvent) OfficialResolution {
+	var out OfficialResolution
+	if ev.Metadata != nil {
+		beat, err1 := decimal.NewFromString(ev.Metadata.PriceToBeat.String())
+		fin, err2 := decimal.NewFromString(ev.Metadata.FinalPrice.String())
+		if err1 == nil && err2 == nil && !beat.IsZero() && !fin.IsZero() {
+			out.PriceToBeat = beat
+			out.FinalPrice = fin
+			if fin.GreaterThanOrEqual(beat) {
+				out.Outcome = "Up"
+			} else {
+				out.Outcome = "Down"
+			}
+			out.Ready = true
+			return out
+		}
+	}
+	if len(ev.Markets) == 0 {
+		return out
+	}
+	gm := ev.Markets[0]
+	resolved := gm.Closed || gm.AutomaticallyResolved || strings.EqualFold(gm.UmaResolutionStatus, "resolved")
+	if !resolved {
+		return out
+	}
+	outcomes, _ := parseStringSlice(gm.Outcomes)
+	prices, _ := parseStringSlice(gm.OutcomePrices)
+	if len(outcomes) == 0 || len(prices) != len(outcomes) {
+		return out
+	}
+	bestI := -1
+	bestP := decimal.Zero
+	for i, ps := range prices {
+		p, err := decimal.NewFromString(ps)
+		if err != nil {
+			continue
+		}
+		if bestI < 0 || p.GreaterThan(bestP) {
+			bestI, bestP = i, p
+		}
+	}
+	// Winner should be ~1 after resolve; require a clear 1-vs-0 style print.
+	if bestI < 0 || bestP.LessThan(decimal.RequireFromString("0.95")) {
+		return out
+	}
+	switch strings.ToLower(outcomes[bestI]) {
+	case "up", "yes":
+		out.Outcome = "Up"
+	case "down", "no":
+		out.Outcome = "Down"
+	default:
+		return out
+	}
+	out.Ready = true
+	return out
+}
+
 func (c *Client) fetchBySlug(ctx context.Context, slug, asset, tf string, windowStart int64) (*Market, error) {
 	u := fmt.Sprintf("%s/events?slug=%s", c.baseURL, url.QueryEscape(slug))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -304,26 +407,35 @@ func (c *Client) fallbackSearch(ctx context.Context, asset, tf string, windowSta
 // --- Gamma JSON types (subset) ---
 
 type gammaEvent struct {
-	Slug     string        `json:"slug"`
-	Title    string        `json:"title"`
-	EndDate  string        `json:"endDate"`
-	StartTime string       `json:"startTime"`
-	Markets  []gammaMarket `json:"markets"`
+	Slug      string        `json:"slug"`
+	Title     string        `json:"title"`
+	EndDate   string        `json:"endDate"`
+	StartTime string        `json:"startTime"`
+	Closed    bool          `json:"closed"`
+	Markets   []gammaMarket `json:"markets"`
+	Metadata  *gammaMeta    `json:"eventMetadata"`
+}
+
+type gammaMeta struct {
+	FinalPrice  json.Number `json:"finalPrice"`
+	PriceToBeat json.Number `json:"priceToBeat"`
 }
 
 type gammaMarket struct {
-	Slug            string          `json:"slug"`
-	Question        string          `json:"question"`
-	ConditionID     string          `json:"conditionId"`
-	ClobTokenIDs    json.RawMessage `json:"clobTokenIds"`
-	Outcomes        json.RawMessage `json:"outcomes"`
-	OutcomePrices   json.RawMessage `json:"outcomePrices"`
-	EndDate         string          `json:"endDate"`
-	EventStartTime  string          `json:"eventStartTime"`
-	Active          bool            `json:"active"`
-	Closed          bool            `json:"closed"`
-	BestBid         any             `json:"bestBid"`
-	BestAsk         any             `json:"bestAsk"`
+	Slug                   string          `json:"slug"`
+	Question               string          `json:"question"`
+	ConditionID            string          `json:"conditionId"`
+	ClobTokenIDs           json.RawMessage `json:"clobTokenIds"`
+	Outcomes               json.RawMessage `json:"outcomes"`
+	OutcomePrices          json.RawMessage `json:"outcomePrices"`
+	EndDate                string          `json:"endDate"`
+	EventStartTime         string          `json:"eventStartTime"`
+	Active                 bool            `json:"active"`
+	Closed                 bool            `json:"closed"`
+	AutomaticallyResolved  bool            `json:"automaticallyResolved"`
+	UmaResolutionStatus    string          `json:"umaResolutionStatus"`
+	BestBid                any             `json:"bestBid"`
+	BestAsk                any             `json:"bestAsk"`
 }
 
 func parseStringSlice(raw json.RawMessage) ([]string, error) {

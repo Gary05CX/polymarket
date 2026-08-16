@@ -69,7 +69,7 @@ func (g GammaConfig) Timeout() time.Duration {
 type CLOBConfig struct {
 	Host    string `yaml:"host"`
 	ChainID int    `yaml:"chain_id"`
-	DryRun  bool   `yaml:"dry_run"`
+	DryRun  bool   `yaml:"dry_run"` // env DRY_RUN overrides; keep true until official-settle paper looks good
 }
 
 // DatabaseConfig selects backend: duckdb (default) or postgres.

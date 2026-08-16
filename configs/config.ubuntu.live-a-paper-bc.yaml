@@ -2,6 +2,7 @@
 #
 # .env:
 #   CONFIG_PATH=configs/config.ubuntu.live-a-paper-bc.yaml
+#   DRY_RUN=true           # recommended while collecting official-outcome paper
 #   DRY_RUN=false          # A hits CLOB; B/C still paper
 #   PRIVATE_KEY=...
 #   FUNDER=...             # if proxy

@@ -92,7 +92,13 @@ func run() error {
 	exec := execution.New(cfg, clob, st, log)
 	strat := strategy.New(cfg.StrategyA, cfg.StrategyB, cfg.StrategyC, cfg.FairValue)
 	rm := risk.New(cfg.Risk, st, cfg.CLOB.DryRun, cfg.EffectiveDryRun)
-	settler := settle.New(st, log, cfg.Risk.PaperFeeBps)
+	settler := settle.New(st, log, cfg.Risk.PaperFeeBps, func(ctx context.Context, slug string) (string, bool, error) {
+		res, err := disc.FetchOfficialResolution(ctx, slug)
+		if err != nil {
+			return "", false, err
+		}
+		return res.Outcome, res.Ready, nil
+	})
 
 	ticker := time.NewTicker(cfg.Loop.PollInterval())
 	defer ticker.Stop()
@@ -239,6 +245,7 @@ func tick(
 		mon.Info(ctx, ev, map[string]any{
 			"slug":      r.Slug,
 			"outcome":   r.Outcome,
+			"official":  r.Official,
 			"pnl_usd":   r.PnLUSD.String(),
 			"fee_usd":   r.FeeUSD.String(),
 			"open":      r.Open.String(),

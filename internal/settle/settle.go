@@ -3,6 +3,7 @@ package settle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,6 +11,13 @@ import (
 	"github.com/Gary05CX/polymarket/internal/store"
 	"github.com/shopspring/decimal"
 )
+
+// OfficialLookup returns the Polymarket/Chainlink winner when ready.
+// ok=false means not resolved yet (skip this tick; do not use Binance).
+type OfficialLookup func(ctx context.Context, slug string) (outcome string, ready bool, err error)
+
+// ErrOfficialPending means Gamma has not published a resolved outcome yet.
+var ErrOfficialPending = errors.New("official outcome not ready")
 
 // Result is one market settlement.
 type Result struct {
@@ -21,27 +29,29 @@ type Result struct {
 	Close     decimal.Decimal
 	Positions int
 	// Kind is paper_settle or live_settle (matches pnl_ledger.kind).
-	Kind string
-	Live bool
+	Kind     string
+	Live     bool
+	Official bool // true when outcome came from Gamma/Chainlink, not Binance
 }
 
-// Engine settles expired markets using open vs close spot (paper resolve).
-// Polymarket official resolve is Chainlink; this is an approximation for dry-run analytics.
+// Engine settles expired markets using official Gamma outcome when provided.
 type Engine struct {
-	st     *store.Store
-	log    *slog.Logger
-	feeBps int
+	st       *store.Store
+	log      *slog.Logger
+	feeBps   int
+	official OfficialLookup
 }
 
 // New creates a settlement engine. feeBps is applied to notional cost on paper fills.
-func New(st *store.Store, log *slog.Logger, feeBps int) *Engine {
+// official may be nil (tests only) — then Binance open/close is used as a fallback.
+func New(st *store.Store, log *slog.Logger, feeBps int, official OfficialLookup) *Engine {
 	if log == nil {
 		log = slog.Default()
 	}
 	if feeBps < 0 {
 		feeBps = 0
 	}
-	return &Engine{st: st, log: log, feeBps: feeBps}
+	return &Engine{st: st, log: log, feeBps: feeBps, official: official}
 }
 
 // RunSettlements settles all due markets. spotByAsset is live feed fallback if no close_price.
@@ -54,7 +64,11 @@ func (e *Engine) RunSettlements(ctx context.Context, now time.Time, spotByAsset 
 	for _, m := range due {
 		r, err := e.settleOne(ctx, m, now, spotByAsset)
 		if err != nil {
-			e.log.Warn("settle failed", "slug", m.Slug, "err", err)
+			if errors.Is(err, ErrOfficialPending) {
+				e.log.Debug("settle wait official", "slug", m.Slug)
+			} else {
+				e.log.Warn("settle failed", "slug", m.Slug, "err", err)
+			}
 			continue
 		}
 		out = append(out, r)
@@ -92,7 +106,19 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 	r.Close = closePx
 
 	outcome := "Unknown"
-	if ok && !open.IsZero() && !closePx.IsZero() {
+	official := false
+	if e.official != nil {
+		off, ready, err := e.official(ctx, m.Slug)
+		if err != nil {
+			return r, err
+		}
+		if !ready || (off != "Up" && off != "Down") {
+			return r, ErrOfficialPending
+		}
+		outcome = off
+		official = true
+	} else if ok && !open.IsZero() && !closePx.IsZero() {
+		// Test / no Gamma: Binance open vs close (can disagree with Chainlink TWAP).
 		if closePx.GreaterThanOrEqual(open) {
 			outcome = "Up"
 		} else {
@@ -100,6 +126,7 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 		}
 	}
 	r.Outcome = outcome
+	r.Official = official
 
 	winToken := ""
 	switch outcome {
@@ -265,6 +292,7 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 	e.log.Info("market settled",
 		"slug", m.Slug,
 		"outcome", outcome,
+		"official", official,
 		"pnl_usd", totalPnL.String(),
 		"fee_usd", totalFee.String(),
 		"open", open.String(),
