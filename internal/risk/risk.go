@@ -83,15 +83,6 @@ func (m *Manager) tally(reason string) {
 
 // Filter returns allowed signals and reasons for rejected ones.
 func (m *Manager) Filter(ctx context.Context, signals []strategy.Signal) (allowed []strategy.Signal, rejected []string) {
-	if halted, reason := m.Halted(); halted {
-		for _, s := range signals {
-			msg := fmt.Sprintf("%s %s: circuit breaker (%s)", s.MarketSlug, s.Strategy, reason)
-			rejected = append(rejected, msg)
-			m.tally("circuit_breaker")
-		}
-		return nil, rejected
-	}
-
 	if err := m.checkLossLimits(ctx); err != nil {
 		m.SetHalt(true, err.Error())
 		for _, s := range signals {
@@ -100,6 +91,10 @@ func (m *Manager) Filter(ctx context.Context, signals []strategy.Signal) (allowe
 			m.tally("loss_limit")
 		}
 		return nil, rejected
+	}
+	// Limits ok now — clear a previous latch (hour/day rolled or paper-vs-live mix fixed).
+	if halted, _ := m.Halted(); halted {
+		m.SetHalt(false, "")
 	}
 
 	now := time.Now().UTC()

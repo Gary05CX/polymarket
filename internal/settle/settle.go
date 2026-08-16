@@ -151,7 +151,11 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 	totalPnL := decimal.Zero
 	totalFee := decimal.Zero
 	anyLive := false
-	byStrat := map[string]decimal.Decimal{}
+	type stratPnL struct {
+		pnl  decimal.Decimal
+		live bool
+	}
+	byStrat := map[string]stratPnL{}
 
 	for _, lg := range legs {
 		if !lg.dryRun && lg.status != "position" {
@@ -180,7 +184,12 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 		if stKey == "" {
 			stKey = "?"
 		}
-		byStrat[stKey] = byStrat[stKey].Add(pnl)
+		rec := byStrat[stKey]
+		rec.pnl = rec.pnl.Add(pnl)
+		if !lg.dryRun && lg.status != "position" {
+			rec.live = true
+		}
+		byStrat[stKey] = rec
 
 		if lg.id != "" {
 			term := "dry_settled"
@@ -221,16 +230,22 @@ func (e *Engine) settleOne(ctx context.Context, m store.Market, now time.Time, s
 			return r, err
 		}
 	} else {
-		for st, pnl := range byStrat {
-			skind := kind
+		// Kind follows THIS strategy's orders, not "market has any live order".
+		// Otherwise paper C on the same window is tagged live_settle_C and
+		// trips the live-A hourly breaker.
+		for st, rec := range byStrat {
+			skind := "paper_settle"
+			if rec.live {
+				skind = "live_settle"
+			}
 			if st != "?" && st != "" {
-				skind = kind + "_" + st // e.g. paper_settle_A
+				skind = skind + "_" + st
 			}
 			detail := fmt.Sprintf(
 				`{"slug":%q,"strategy":%q,"outcome":%q,"open":%q,"close":%q,"pnl_usd":%q,"fee_bps":%d,"live":%v}`,
-				m.Slug, st, outcome, open.String(), closePx.String(), pnl.String(), e.feeBps, live,
+				m.Slug, st, outcome, open.String(), closePx.String(), rec.pnl.String(), e.feeBps, rec.live,
 			)
-			if err := e.st.RecordPnL(ctx, skind, pnl, detail); err != nil {
+			if err := e.st.RecordPnL(ctx, skind, rec.pnl, detail); err != nil {
 				return r, err
 			}
 		}
