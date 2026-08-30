@@ -1,0 +1,7 @@
+.env
+config.yaml
+data/
+*.duckdb
+*.duckdb.wal
+/bot
+/cmd/bot/bot

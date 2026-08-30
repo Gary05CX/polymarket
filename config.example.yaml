@@ -1,0 +1,71 @@
+mode: dry_run # dry_run | paper | live
+strategy: window_delta # window_delta | inertia_3m
+max_windows: 1 # 0 = 無限；dry-run 預設 1
+
+assets:
+  - BTC
+  # - ETH
+
+database:
+  driver: postgres # postgres | duckdb
+  dsn: "postgres:///polymarket_bot?host=/var/run/postgresql"
+  # driver: duckdb
+  # dsn: "data/bot.duckdb"
+
+polymarket:
+  gamma_url: "https://gamma-api.polymarket.com"
+  clob_url: "https://clob.polymarket.com"
+  rtds_url: "wss://ws-live-data.polymarket.com"
+  chain_id: 137
+
+binance:
+  rest_url: "https://api.binance.com"
+  symbols:
+    BTC: BTCUSDT
+    ETH: ETHUSDT
+
+clock:
+  sync: binance # clob | binance | local
+  resync_interval_sec: 30
+
+execution:
+  use_min_shares_only: true
+  budget_usdc_cap: 20
+  order_type: FOK
+  price_offset: 0.01
+  poll_book_before_order: true
+
+strategies:
+  window_delta:
+    wake_before_sec: 65
+    entry_seconds_min: 10
+    entry_seconds_max: 50
+    price_min:
+      BTC: 0.94
+      ETH: 0.92
+    price_max: 0.99
+    delta_skip: 0.0005
+    delta_weak: 0.001
+    delta_strong: 0.002
+    min_confidence: 0.30
+    atr_periods: 5
+    atr_multiplier: 1.5
+    poll_interval_sec: 3
+
+  inertia_3m:
+    entry_delay_sec: 170
+    min_time_remaining: 60
+    flat_threshold_pct: 0.05
+    strong_move_pct: 0.10
+    min_score_moderate: 4
+    min_score_strong: 5
+    min_edge: 0.10
+    poll_interval_sec: 10
+
+resolver:
+  enabled: true
+  poll_after_close_sec: 30
+  poll_interval_sec: 15
+  poll_timeout_sec: 900
+  store_provisional_twap: false
+  twap_topic: auto

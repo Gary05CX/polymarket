@@ -1,0 +1,19 @@
+[Unit]
+Description=Polymarket 5m bot inertia_3m (dry-run, Postgres)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/gary05cx/Documents/Git/GitHub/polymarket
+ExecStart=/home/gary05cx/Documents/Git/GitHub/polymarket/bot -config /home/gary05cx/Documents/Git/GitHub/polymarket/config.yaml -mode dry_run -strategy inertia_3m -max-windows 0
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=polymarket-bot-inertia
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
